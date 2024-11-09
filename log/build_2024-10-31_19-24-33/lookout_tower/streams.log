@@ -1,0 +1,32 @@
+[0.599s] Invoking command in '/home/william/repos/lookout_ws/src/lookout_tower': PYTHONPATH=/home/william/repos/lookout_ws/build/lookout_tower/prefix_override:/usr/lib/python3/dist-packages/colcon_core/task/python/colcon_distutils_commands:/home/william/repos/lookout_ws/install/lookout_tower/lib/python3.10/site-packages:${PYTHONPATH} /usr/bin/python3 -W ignore:setup.py install is deprecated setup.py egg_info --egg-base ../../build/lookout_tower build --build-base /home/william/repos/lookout_ws/build/lookout_tower/build install --record /home/william/repos/lookout_ws/build/lookout_tower/install.log --single-version-externally-managed install_data
+[0.769s] running egg_info
+[0.769s] creating ../../build/lookout_tower/lookout_tower.egg-info
+[0.780s] writing ../../build/lookout_tower/lookout_tower.egg-info/PKG-INFO
+[0.788s] writing dependency_links to ../../build/lookout_tower/lookout_tower.egg-info/dependency_links.txt
+[0.788s] writing requirements to ../../build/lookout_tower/lookout_tower.egg-info/requires.txt
+[0.788s] writing top-level names to ../../build/lookout_tower/lookout_tower.egg-info/top_level.txt
+[0.788s] writing manifest file '../../build/lookout_tower/lookout_tower.egg-info/SOURCES.txt'
+[0.811s] reading manifest file '../../build/lookout_tower/lookout_tower.egg-info/SOURCES.txt'
+[0.812s] writing manifest file '../../build/lookout_tower/lookout_tower.egg-info/SOURCES.txt'
+[0.812s] running build
+[0.812s] running build_py
+[0.812s] creating /home/william/repos/lookout_ws/build/lookout_tower/build
+[0.812s] creating /home/william/repos/lookout_ws/build/lookout_tower/build/lib
+[0.812s] creating /home/william/repos/lookout_ws/build/lookout_tower/build/lib/lookout_tower
+[0.812s] copying lookout_tower/__init__.py -> /home/william/repos/lookout_ws/build/lookout_tower/build/lib/lookout_tower
+[0.812s] running install
+[0.816s] running install_lib
+[0.828s] creating /home/william/repos/lookout_ws/install/lookout_tower/lib/python3.10/site-packages/lookout_tower
+[0.828s] copying /home/william/repos/lookout_ws/build/lookout_tower/build/lib/lookout_tower/__init__.py -> /home/william/repos/lookout_ws/install/lookout_tower/lib/python3.10/site-packages/lookout_tower
+[0.828s] byte-compiling /home/william/repos/lookout_ws/install/lookout_tower/lib/python3.10/site-packages/lookout_tower/__init__.py to __init__.cpython-310.pyc
+[0.828s] running install_data
+[0.829s] creating /home/william/repos/lookout_ws/install/lookout_tower/share/ament_index
+[0.829s] creating /home/william/repos/lookout_ws/install/lookout_tower/share/ament_index/resource_index
+[0.829s] creating /home/william/repos/lookout_ws/install/lookout_tower/share/ament_index/resource_index/packages
+[0.829s] copying resource/lookout_tower -> /home/william/repos/lookout_ws/install/lookout_tower/share/ament_index/resource_index/packages
+[0.829s] copying package.xml -> /home/william/repos/lookout_ws/install/lookout_tower/share/lookout_tower
+[0.829s] running install_egg_info
+[0.841s] Copying ../../build/lookout_tower/lookout_tower.egg-info to /home/william/repos/lookout_ws/install/lookout_tower/lib/python3.10/site-packages/lookout_tower-0.0.0-py3.10.egg-info
+[0.843s] running install_scripts
+[0.951s] writing list of installed files to '/home/william/repos/lookout_ws/build/lookout_tower/install.log'
+[0.972s] Invoked command in '/home/william/repos/lookout_ws/src/lookout_tower' returned '0': PYTHONPATH=/home/william/repos/lookout_ws/build/lookout_tower/prefix_override:/usr/lib/python3/dist-packages/colcon_core/task/python/colcon_distutils_commands:/home/william/repos/lookout_ws/install/lookout_tower/lib/python3.10/site-packages:${PYTHONPATH} /usr/bin/python3 -W ignore:setup.py install is deprecated setup.py egg_info --egg-base ../../build/lookout_tower build --build-base /home/william/repos/lookout_ws/build/lookout_tower/build install --record /home/william/repos/lookout_ws/build/lookout_tower/install.log --single-version-externally-managed install_data

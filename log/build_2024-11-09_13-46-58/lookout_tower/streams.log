@@ -1,0 +1,32 @@
+[0.585s] Invoking command in '/home/william/repos/lookout_ws/src/lookout_tower': PYTHONPATH=/home/william/repos/lookout_ws/build/lookout_tower/prefix_override:/usr/lib/python3/dist-packages/colcon_core/task/python/colcon_distutils_commands:/home/william/repos/lookout_ws/install/lookout_tower/lib/python3.10/site-packages:${PYTHONPATH} /usr/bin/python3 -W ignore:setup.py install is deprecated setup.py egg_info --egg-base ../../build/lookout_tower build --build-base /home/william/repos/lookout_ws/build/lookout_tower/build install --record /home/william/repos/lookout_ws/build/lookout_tower/install.log --single-version-externally-managed install_data
+[0.765s] running egg_info
+[0.777s] writing ../../build/lookout_tower/lookout_tower.egg-info/PKG-INFO
+[0.777s] writing dependency_links to ../../build/lookout_tower/lookout_tower.egg-info/dependency_links.txt
+[0.778s] writing requirements to ../../build/lookout_tower/lookout_tower.egg-info/requires.txt
+[0.778s] writing top-level names to ../../build/lookout_tower/lookout_tower.egg-info/top_level.txt
+[0.803s] reading manifest file '../../build/lookout_tower/lookout_tower.egg-info/SOURCES.txt'
+[0.804s] writing manifest file '../../build/lookout_tower/lookout_tower.egg-info/SOURCES.txt'
+[0.804s] running build
+[0.804s] running build_py
+[0.804s] copying lookout_tower/__init__.py -> /home/william/repos/lookout_ws/build/lookout_tower/build/lib/lookout_tower
+[0.804s] running install
+[0.808s] running install_lib
+[0.821s] running install_data
+[0.822s] copying resource/lookout_tower -> /home/william/repos/lookout_ws/install/lookout_tower/share/ament_index/resource_index/packages
+[0.822s] copying package.xml -> /home/william/repos/lookout_ws/install/lookout_tower/share/lookout_tower
+[0.822s] copying launch/rsp.launch.py -> /home/william/repos/lookout_ws/install/lookout_tower/share/lookout_tower/launch
+[0.822s] copying worlds/living_room_world.world -> /home/william/repos/lookout_ws/install/lookout_tower/share/lookout_tower/worlds
+[0.822s] copying worlds/maze.world -> /home/william/repos/lookout_ws/install/lookout_tower/share/lookout_tower/worlds
+[0.822s] copying urdf/exort.xacro -> /home/william/repos/lookout_ws/install/lookout_tower/share/lookout_tower/urdf
+[0.822s] copying urdf/exort.sdf -> /home/william/repos/lookout_ws/install/lookout_tower/share/lookout_tower/urdf
+[0.822s] copying urdf/camera.urdf -> /home/william/repos/lookout_ws/install/lookout_tower/share/lookout_tower/urdf
+[0.822s] copying urdf/exort.urdf -> /home/william/repos/lookout_ws/install/lookout_tower/share/lookout_tower/urdf
+[0.822s] copying description/robot_core.xacro -> /home/william/repos/lookout_ws/install/lookout_tower/share/lookout_tower/description
+[0.822s] copying description/robot.urdf.xacro -> /home/william/repos/lookout_ws/install/lookout_tower/share/lookout_tower/description
+[0.823s] copying rviz/default_config.rviz -> /home/william/repos/lookout_ws/install/lookout_tower/share/lookout_tower/rviz
+[0.823s] running install_egg_info
+[0.837s] removing '/home/william/repos/lookout_ws/install/lookout_tower/lib/python3.10/site-packages/lookout_tower-0.0.0-py3.10.egg-info' (and everything under it)
+[0.837s] Copying ../../build/lookout_tower/lookout_tower.egg-info to /home/william/repos/lookout_ws/install/lookout_tower/lib/python3.10/site-packages/lookout_tower-0.0.0-py3.10.egg-info
+[0.838s] running install_scripts
+[0.957s] writing list of installed files to '/home/william/repos/lookout_ws/build/lookout_tower/install.log'
+[0.977s] Invoked command in '/home/william/repos/lookout_ws/src/lookout_tower' returned '0': PYTHONPATH=/home/william/repos/lookout_ws/build/lookout_tower/prefix_override:/usr/lib/python3/dist-packages/colcon_core/task/python/colcon_distutils_commands:/home/william/repos/lookout_ws/install/lookout_tower/lib/python3.10/site-packages:${PYTHONPATH} /usr/bin/python3 -W ignore:setup.py install is deprecated setup.py egg_info --egg-base ../../build/lookout_tower build --build-base /home/william/repos/lookout_ws/build/lookout_tower/build install --record /home/william/repos/lookout_ws/build/lookout_tower/install.log --single-version-externally-managed install_data
