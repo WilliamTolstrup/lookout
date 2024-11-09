@@ -1,6 +1,0 @@
-source;share/lookout_tower/hook/pythonpath.ps1
-source;share/lookout_tower/hook/pythonpath.dsv
-source;share/lookout_tower/hook/pythonpath.sh
-source;share/lookout_tower/hook/ament_prefix_path.ps1
-source;share/lookout_tower/hook/ament_prefix_path.dsv
-source;share/lookout_tower/hook/ament_prefix_path.sh
