@@ -18,15 +18,14 @@ setup(
         # Include all launch files.
         (os.path.join('share', package_name, 'launch'), glob(os.path.join('launch', '*.launch.py'))),
         (os.path.join('share', package_name, 'worlds'), glob(os.path.join('worlds/*'))),
-        (os.path.join('share', package_name, 'urdf'), glob(os.path.join('urdf/*'))),
         (os.path.join('share', package_name, 'description'), glob(os.path.join('description/*'))),
-        (os.path.join('share', package_name, 'rviz'), glob(os.path.join('rviz/*'))),
+        (os.path.join('share', package_name, 'config'), glob(os.path.join('config/*'))),
     ],
 
     install_requires=['setuptools'],
     zip_safe=True,
     maintainer='william',
-    maintainer_email='Wtolst19@student.aau.dk',
+    maintainer_email='WilliamTolstrup@hotmail.com',
     description='TODO: Package description',
     license='TODO: License declaration',
     tests_require=['pytest'],
