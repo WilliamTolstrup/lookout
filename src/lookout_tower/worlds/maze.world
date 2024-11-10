@@ -90,25 +90,10 @@
       <elevation>0</elevation>
       <heading_deg>0</heading_deg>
     </spherical_coordinates>
-    <model name="camera_model">
-      <link name="camera_link">
-        <pose>0 0 1.5 0 -1.57 0</pose>
-        <sensor type="camera" name="camera_sensor">
-          <camera>
-            <horizontal_fov>0.580</horizontal_fov>
-            <image>
-              <width>640</width>
-              <height>360</height>
-            </image>
-            <clip>
-              <near>0.1</near>
-              <far>100</far>
-            </clip>
-          </camera>
-        </sensor>
-      </link>
-    </model>
-    <model name='grey_wall'>
+
+<!-- MODELS -->
+
+    <model name='wall1'>
       <static>1</static>
       <link name='link'>
         <pose>0 0 1.4 0 -0 0</pose>
@@ -153,7 +138,8 @@
       </link>
       <pose>0.27028 2.61098 0 0 -0 0</pose>
     </model>
-    <model name='grey_wall_clone'>
+
+    <model name='wall2'>
       <static>1</static>
       <link name='link'>
         <pose>0 0 1.4 0 -0 0</pose>
@@ -198,7 +184,8 @@
       </link>
       <pose>0.129617 3.28613 -2 0 -0 0</pose>
     </model>
-    <model name='grey_wall_clone_clone'>
+
+    <model name='wall3'>
       <static>1</static>
       <link name='link'>
         <pose>0 0 1.4 0 -0 0</pose>
@@ -243,7 +230,8 @@
       </link>
       <pose>-1.63755 -0.147095 -2 0 -0 1.57</pose>
     </model>
-    <model name='grey_wall_clone_0'>
+    
+    <model name='wall4'>
       <static>1</static>
       <link name='link'>
         <pose>0 0 1.4 0 -0 0</pose>
@@ -288,7 +276,8 @@
       </link>
       <pose>0.092152 -1.15709 -2 0 -0 0</pose>
     </model>
-    <model name='grey_wall_clone_clone_0'>
+
+    <model name='wall5'>
       <static>1</static>
       <link name='link'>
         <pose>0 0 1.4 0 -0 0</pose>
@@ -333,12 +322,39 @@
       </link>
       <pose>-3.17802 4.13884 -2 0 -0 1.57</pose>
     </model>
+
+    <model name='Table-Block'>
+      <static>1</static>
+      <link name='link'>
+        <pose>0 -3 1.5 0</pose>
+        <collision name='collision'>
+          <geometry>
+            <box>
+              <size>0.2 0.2 3</size>
+            </box>
+          </geometry>
+        </collision>
+        <visual name='visual'>
+          <cast_shadows>0</cast_shadows>
+          <geometry>
+            <box>
+              <size>0.2 0.2 3</size>
+            </box>
+          </geometry>
+        </visual>
+        <self_collide>0</self_collide>
+        <enable_wind>0</enable_wind>
+        <kinematic>0</kinematic>
+      </link>
+    </model>
+
     <state world_name='default'>
       <sim_time>804 732000000</sim_time>
       <real_time>805 404597102</real_time>
       <wall_time>1731150108 502005792</wall_time>
       <iterations>804732</iterations>
-      <model name='grey_wall'>
+
+      <model name='wall1'>
         <pose>0.2 5 -2 0 -0 0</pose>
         <scale>1 1 1</scale>
         <link name='link'>
@@ -348,7 +364,8 @@
           <wrench>0 0 0 0 -0 0</wrench>
         </link>
       </model>
-      <model name='grey_wall_clone'>
+
+      <model name='wall2'>
         <pose>2 4 -2 0 -0 1.57</pose>
         <scale>1 1 1</scale>
         <link name='link'>
@@ -358,7 +375,8 @@
           <wrench>0 0 0 0 -0 0</wrench>
         </link>
       </model>
-      <model name='grey_wall_clone_0'>
+
+      <model name='wall3'>
         <pose>0 -1.5 -2 0 -0 0</pose>
         <scale>1 1 1</scale>
         <link name='link'>
@@ -368,7 +386,8 @@
           <wrench>0 0 0 0 -0 0</wrench>
         </link>
       </model>
-      <model name='grey_wall_clone_clone'>
+
+      <model name='wall4'>
         <pose>-1.5 -0.5 -2 0 -0 1.57</pose>
         <scale>1 1 1</scale>
         <link name='link'>
@@ -378,7 +397,8 @@
           <wrench>0 0 0 0 -0 0</wrench>
         </link>
       </model>
-      <model name='grey_wall_clone_clone_0'>
+
+      <model name='wall5'>
         <pose>-3 4 -2 0 -0 1.57</pose>
         <scale>1 1 1</scale>
         <link name='link'>
@@ -388,6 +408,7 @@
           <wrench>0 0 0 0 -0 0</wrench>
         </link>
       </model>
+
       <model name='ground_plane'>
         <pose>0 0 0 0 -0 0</pose>
         <scale>1 1 1</scale>
@@ -398,6 +419,7 @@
           <wrench>0 0 0 0 -0 0</wrench>
         </link>
       </model>
+
       <light name='sun'>
         <pose>0 0 10 0 -0 0</pose>
       </light>
@@ -409,5 +431,53 @@
         <projection_type>perspective</projection_type>
       </camera>
     </gui>
+
+      <model name="camera_model">
+        <static>true</static> <!-- Ensures camera stays in a fixed position -->
+        <link name="camera_link">
+          <pose>0 -2.9 3 0 0.50 1.57</pose>
+
+          <!-- Visual Representation of Camera -->
+          <visual name="camera_visual">
+            <cast_shadows>false</cast_shadows>
+            <geometry>
+              <box>
+                <size>0.05 0.05 0.05</size>
+              </box>
+            </geometry>
+          </visual>
+          <!-- Sensor: Camera -->
+          <sensor type="camera" name="camera_sensor">
+            <always_on>true</always_on>
+            <update_rate>30</update_rate> <!-- Set update rate to control FPS -->
+            <camera>
+              <horizontal_fov>1.5</horizontal_fov> <!-- 0.580 From real camera-->
+              <image>
+                <width>640</width>
+                <height>360</height>
+                <format>R8G8B8</format> <!-- Ensure format is defined (optional) -->
+              </image>
+              <clip>
+                <near>0.1</near>
+                <far>200</far>
+              </clip>
+            </camera>
+            <pose>0 0 0 0 0 0</pose> <!-- Position of the sensor within the link -->
+            <visualize>true</visualize> <!-- Allows visualization in Gazebo -->
+
+            <!-- Gazebo ROS Camera Plugin -->
+            <plugin name="camera_plugin" filename="libgazebo_ros_camera.so">
+              <ros>
+                <remapping>image_raw:=image</remapping>
+              </ros>
+              <camera_name>camera</camera_name>
+              <image_topic>image_raw</image_topic>
+              <camera_info_topic>camera_info</camera_info_topic>
+            </plugin>
+          </sensor>
+        </link>
+      </model>
+
+
   </world>
 </sdf>
