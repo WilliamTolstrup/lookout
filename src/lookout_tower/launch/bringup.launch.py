@@ -16,9 +16,9 @@ from launch.launch_description_sources import PythonLaunchDescriptionSource
 
 
 def generate_launch_description():
-    lookout_dir = get_package_share_directory('lookout_tower')
-    launch_dir = os.path.join(lookout_dir, 'launch')
-    description_dir = os.path.join(lookout_dir, 'description')
+    bringup_dir = get_package_share_directory('lookout_tower')
+    launch_dir = os.path.join(bringup_dir, 'launch')
+    description_dir = os.path.join(bringup_dir, 'description')
 
     # Robot model, process the URDF file
     pkg_path = os.path.join(get_package_share_directory('lookout_tower'))
@@ -29,11 +29,12 @@ def generate_launch_description():
     world = LaunchConfiguration('world')
     simulator = LaunchConfiguration('simulator')
     use_sim_time = LaunchConfiguration('use_sim_time', default='true')
+    rviz_config = LaunchConfiguration("rviz_config")
 
     # Declare the launch arguments
     declare_world_cmd = DeclareLaunchArgument(
         'world',
-        default_value=os.path.join(lookout_dir, 'worlds', 'maze.world'),
+        default_value=os.path.join(bringup_dir, 'worlds', 'maze.world'),
         description='Full path to world file to load')
 
     declare_simulator_cmd = DeclareLaunchArgument(
@@ -45,6 +46,12 @@ def generate_launch_description():
         'use_sim_time',
         default_value='true',
         description='Use sim time if true')
+    
+    declare_rviz_config_arg = DeclareLaunchArgument(
+        'rviz_config',
+        default_value=os.path.join(bringup_dir, 'config', 'view_robot.rviz'),
+        description="Absolute path to rviz config"
+    )
 
     # Start Gazebo with plugin providing the robot spawing service
     start_gazebo_cmd = ExecuteProcess(
@@ -79,6 +86,18 @@ def generate_launch_description():
         parameters=[{'use_sim_time': use_sim_time}]
     )
 
+    # Open Rviz2 with config file
+    rviz2 = Node(
+        package="rviz2",
+        executable="rviz2",
+        name="rviz2",
+        output="screen",
+        parameters=[{'use_sim_time': use_sim_time}],
+        arguments=[
+            "-d", rviz_config
+        ]
+    )
+
    
     
     # Create the launch description and populate
@@ -88,11 +107,13 @@ def generate_launch_description():
     ld.add_action(declare_simulator_cmd)
     ld.add_action(declare_world_cmd)
     ld.add_action(declare_use_sim_time)
+    ld.add_action(declare_rviz_config_arg)
 
     # Add the actions to start gazebo, robots and simulations
     ld.add_action(robot_state_publisher)
     ld.add_action(joint_state_publisher)
     ld.add_action(start_gazebo_cmd)
     ld.add_action(spawn_robot_cmd)
+    ld.add_action(rviz2)
 
     return ld
