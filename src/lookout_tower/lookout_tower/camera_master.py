@@ -7,13 +7,18 @@ from geometry_msgs.msg import Vector3
 import numpy as np
 import cv2
 from cv_bridge import CvBridge
+import math
 
 bridge = CvBridge()
 
 class DetectRobot(Node):
     def __init__(self):
         super().__init__('detect_robot')
-        # Start subscription and publisher right away
+        # Init tracked wheels
+        self.tracked_wheels = {}  # Format: {id: (x, y)}
+        self.next_id = 0
+
+        # Start subscription and publisher
         self.get_image_raw = self.create_subscription(Image, '/camera/image_raw', self.image_callback, 10)
         self.pub_image_processed = self.create_publisher(Image, 'camera/image_processed', 10)
         self.pub_pos_angle = self.create_publisher(Vector3, '/robot/position_angle', 10)
@@ -21,97 +26,163 @@ class DetectRobot(Node):
     def convert_between_ros2_and_opencv(self, img, parameter="ROS2_to_CV2"):
         if parameter == "ROS2_to_CV2":
             return bridge.imgmsg_to_cv2(img, desired_encoding='bgr8')
-
-        if parameter == "CV2_to_ROS2":
+        elif parameter == "CV2_to_ROS2":
             return bridge.cv2_to_imgmsg(img)
-
         else:
             self.get_logger().warn("Parameter not set! Use either: ROS2_to_CV2 or CV2_to_ROS2")
-
-
 
     def image_callback(self, msg):
         # Convert ROS Image to OpenCV image
         image_raw = self.convert_between_ros2_and_opencv(msg, parameter="ROS2_to_CV2")
 
         if image_raw is not None:
-            self.find_wheels(image_raw, debug_image=True)
-
-    def fixHSVRange(self, h, s, v):
-        # Normal H,S,V: (0-360,0-100%,0-100%)
-        # OpenCV H,S,V: (0-180,0-255 ,0-255)
-        return (180 * h / 360, 255 * s / 100, 255 * v / 100)
+            image_processed, pos_angle = self.find_wheels(image_raw, debug_image=True)
+            if pos_angle and pos_angle[0] is not None:
+                self.publish_msgs(image_processed, pos_angle)
+            else:
+                self.get_logger().warn("Pose could not be calculated. Not publishing.")
 
 
     def find_wheels(self, img, debug_image=False):
-        # Messages
-        position_and_angle_msg = Vector3()
-        midpoint = (0,0)
-        angle = 0.0
+        """
+        Detect wheels in the image and calculate the robot's pose.
+        """
+        # Initialize pose variables
+        robot_position = None
+        robot_orientation = None
 
-        # Img shape
-        H, W = img.shape[:2]
-
-        # Perform HSV color thresholding to find the distinct blue wheels
-        blue_lower_limit = (100, 50, 50)
-        blue_upper_limit = (130, 255, 255)
+        # Convert to HSV
         hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
-        blue_mask = cv2.inRange(hsv, blue_lower_limit, blue_upper_limit)
 
-        # Find contours
-        contours, _ = cv2.findContours(blue_mask, cv2.RETR_TREE, cv2.CHAIN_APPROX_NONE)
+        # Red and blue thresholds
+        red_lower_1, red_upper_1 = (0, 50, 50), (10, 255, 255)
+        red_lower_2, red_upper_2 = (170, 50, 50), (180, 255, 255)
+        blue_lower, blue_upper = (100, 50, 50), (130, 255, 255)
+
+        # Create masks
+        red_mask_1 = cv2.inRange(hsv, red_lower_1, red_upper_1)
+        red_mask_2 = cv2.inRange(hsv, red_lower_2, red_upper_2)
+        red_mask = cv2.bitwise_or(red_mask_1, red_mask_2)
+        blue_mask = cv2.inRange(hsv, blue_lower, blue_upper)
+
+        # Detect wheel centers
+        red_centers = self.detect_wheel_centers(red_mask, img, debug_image, "red")
+        blue_centers = self.detect_wheel_centers(blue_mask, img, debug_image, "blue")
+
+        # Calculate pose
+        robot_position, robot_orientation = self.calculate_robot_pose(red_centers, blue_centers)
+
+        # Debugging output on image
+        if robot_position is not None:
+            cv2.putText(img, f"Position: {robot_position}", (50, 50),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
+            cv2.putText(img, f"Orientation: {robot_orientation:.2f} degrees", (50, 80),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
+
+        return img, (robot_position, robot_orientation)
+
+
+
+
+    def detect_wheel_centers(self, mask, img, debug_image, color_name):
+        """
+        Detect wheel centers from a mask.
+        :param mask: Binary mask for the color.
+        :param img: Image for debugging.
+        :param debug_image: Whether to draw debug circles.
+        :param color_name: Name of the color ("red" or "blue").
+        :return: List of (x, y) positions for detected wheels.
+        """
+        contours, _ = cv2.findContours(mask, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
         centers = []
         for contour in contours:
-        #    if cv2.contourArea(contour) > 50: # Filter out noise
             (x, y), radius = cv2.minEnclosingCircle(contour)
-
-            if 5 < radius < 20: # Assuming wheel radius is between 5 and 20 pixels, maybe test this
+            if 1 < radius < 20:  # Filter based on radius
                 centers.append((x, y))
+                if debug_image:
+                    color = (0, 0, 255) if color_name == "red" else (255, 0, 0)
+                    cv2.circle(img, (int(x), int(y)), 5, color, -1)
+        return centers
 
-                if debug_image == True:
-                    cv2.circle(img, (int(x), int(y)), 5, (0, 255, 255), -1)
-                        
 
-        # Ensure we detect 4 wheels
-        if len(centers) == 4:
-            # sort by y-coordinate, to separate front and rear wheels (hopefully)
-            centers.sort(key=lambda c: c[1])
-            rear_wheels = centers[:2] # Assuming lower y-coordinate are the rear wheels
-            rear_wheel_1 = (int(rear_wheels[0][0]), int(rear_wheels[0][1]))
-            rear_wheel_2 = (int(rear_wheels[1][0]), int(rear_wheels[1][1]))
-            front_wheels = centers[2:]
+    def calculate_robot_pose(self, front_centers, rear_centers):
+        """
+        Calculate the robot's position and orientation based on wheel centerpoints.
+        :param front_wheels: List of two (x, y) positions for the front wheels.
+        :param rear_wheels: List of two (x, y) positions for the rear wheels.
+        :return: Robot position (midpoint of rear wheels) and orientation (in degrees).
+        """
 
-            # Find midpoint and orientation based on the rear wheels
-            midpoint = ((rear_wheels[0][0] + rear_wheels[1][0]) // 2,
-                        (rear_wheels[0][1] + rear_wheels[1][1]) // 2)
-            print(midpoint)
-            dx = rear_wheels[1][0] - rear_wheels[0][0]
-            dy = rear_wheels[1][1] - rear_wheels[0][1]
-            angle = np.arctan2(dy, dx) * 180 / np.pi
+        if len(front_centers) == 2:
+            # Midpoint of front wheels
+            front_midpoint = (
+                (front_centers[0][0] + front_centers[1][0]) / 2,
+                (front_centers[0][1] + front_centers[1][1]) / 2,
+            )
+        elif len(front_centers) == 1:
+            front_midpoint = front_centers[0]
+        else:
+            front_midpoint = None
+            self.get_logger().warn("Front wheels not detected. Skipping pose calculation.")
+
+
+        if len(rear_centers) == 2:
+            # Midpoint of rear wheels (robot's position)
+            rear_midpoint = (
+                (rear_centers[0][0] + rear_centers[1][0]) / 2,
+                (rear_centers[0][1] + rear_centers[1][1]) / 2,
+            )
+        elif len(rear_centers) == 1:
+            rear_midpoint = rear_centers[0]
+        else:
+            rear_midpoint = None
+            self.get_logger().warn("Rear wheels not detected. Skipping pose calculation.")
+
+        if front_midpoint is None or rear_midpoint is None:
+            return None, None
         
-            if debug_image == True:
-                for (x, y) in centers:
-                    cv2.circle(img, (int(x),int(y)), 5, (0, 255, 255), -1)
-                cv2.circle(img, (int(midpoint[0]), int(midpoint[1])), 5, (255, 0, 0), -1)
-                cv2.line(img, rear_wheel_1, rear_wheel_2, (0, 0, 255), 2)
-                cv2.putText(img, f"Angle: {angle:.2f}", (int(midpoint[0]) + 10, int(midpoint[1]) + 10),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
-                self.get_logger().info(f"Midpoint: {midpoint}, Angle: {angle:.2f}")
+        else:
+            robot_position = round(rear_midpoint[0], 2), round(rear_midpoint[1], 2)
 
-            else:
-                self.get_logger().warn("Did not detect 4 wheels!", once=True)
+            # Calculate orientation as the angle between the front and rear midpoints
+            dx = front_midpoint[0] - rear_midpoint[0]
+            dy = front_midpoint[1] - rear_midpoint[1]
+            robot_orientation = math.atan2(dy, dx) * 180 / math.pi  # Angle in degrees
 
-        # Populate msgs
-        image_processed_msg = self.convert_between_ros2_and_opencv(img, parameter="CV2_to_ROS2")
+            self.get_logger().info(f"Robot Position: {robot_position}, Orientation: {robot_orientation:.2f}")
+            return robot_position, robot_orientation
+
+
+
+    def publish_msgs(self, img_msg, pos_ang_msg):
+        """
+        Publish processed image and robot position + orientation.
+        :param img_msg: The processed image to publish.
+        :param pos_ang_msg: Tuple containing (position, orientation).
+        """
+        # Ensure pos_ang_msg contains three values
+        if pos_ang_msg is None or len(pos_ang_msg) < 2:
+            self.get_logger().warn("Invalid pose data. Skipping publish.")
+            return
+
+        # Fill in default values if data is incomplete
+        robot_position = pos_ang_msg[0] if pos_ang_msg[0] else (0.0, 0.0)
+        robot_orientation = pos_ang_msg[1] if len(pos_ang_msg) > 1 else 0.0
+
+        # Prepare and publish the position message
+        position_angle_msg = Vector3()
+        position_angle_msg.x = robot_position[0]
+        position_angle_msg.y = robot_position[1]
+        position_angle_msg.z = robot_orientation
+        self.pub_pos_angle.publish(position_angle_msg)
+
+        # Publish processed image
+        image_processed_msg = self.convert_between_ros2_and_opencv(img_msg, parameter="CV2_to_ROS2")
         if image_processed_msg is not None:
             self.pub_image_processed.publish(image_processed_msg)
 
-        position_and_angle_msg.x = float(midpoint[0])
-        position_and_angle_msg.y = float(midpoint[1])
-        position_and_angle_msg.z = angle
-        self.pub_pos_angle.publish(position_and_angle_msg)
 
-            
+
 def main(args=None):
     rclpy.init(args=args)
     master_camera_node = DetectRobot()

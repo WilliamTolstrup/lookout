@@ -84,7 +84,7 @@
     </link>
 
     <gazebo reference="front_left_wheel">
-        <material>Gazebo/Blue</material>
+        <material>Gazebo/Red</material>
         <mu1 value="0.001"/> <!-- PLACEHOLDER BEFORE ACKERMANN STEERING -->
         <mu2 value="0.001"/> <!-- PLACEHOLDER BEFORE ACKERMANN STEERING -->
     </gazebo>
@@ -119,7 +119,7 @@
     </link>
 
     <gazebo reference="front_right_wheel">
-        <material>Gazebo/Blue</material>
+        <material>Gazebo/Red</material>
         <mu1 value="0.001"/> <!-- PLACEHOLDER BEFORE ACKERMANN STEERING -->
         <mu2 value="0.001"/> <!-- PLACEHOLDER BEFORE ACKERMANN STEERING -->
     </gazebo>
