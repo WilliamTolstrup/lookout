@@ -9,12 +9,15 @@ import numpy as np
 import cv2
 from cv_bridge import CvBridge
 import math
+from collections import deque
 
 bridge = CvBridge()
 
 class DetectRobot(Node):
     def __init__(self):
         super().__init__('detect_robot')
+
+        self.orientation_filter = OrientationFilter(window_size=25)
 
         # Initialize homography matrices
         self.homography_matrix1 = np.array([[3.35276968e-01,  2.96404276e-02, -1.06713314e+02],
@@ -62,6 +65,8 @@ class DetectRobot(Node):
         # Fuse the data
         if weight1 + weight2 != 0:
             fused_position, fused_orientation = self.weighted_data_fusion(world_robot_position1, world_robot_position2, camera_robot_orientation1, camera_robot_orientation2, weight1, weight2)
+            self.orientation_filter.add_orientation(fused_orientation)
+            fused_orientation = self.orientation_filter.get_filtered_orientation()
         else:
             fused_position, fused_orientation = (0.0, 0.0), 0.0
         self.get_logger().info(f"Fused position: {fused_position}, Fused orientation: {fused_orientation}")
@@ -399,6 +404,35 @@ class DetectRobot(Node):
             self.pub_image2_processed.publish(image2_processed_msg)
 
 
+class OrientationFilter:
+    def __init__(self, window_size=5):
+        self.sin_window = deque(maxlen=window_size)
+        self.cos_window = deque(maxlen=window_size)
+
+    def add_orientation(self, orientation):
+        # Convert to radians
+        orientation = math.radians(orientation)
+
+        # Append sin and cos values to the window
+        self.sin_window.append(math.sin(orientation))
+        self.cos_window.append(math.cos(orientation))
+    
+    def get_filtered_orientation(self):
+        if not self.sin_window or not self.cos_window:
+            return None
+
+        # Calculate the average sin and cos values
+        avg_sin = sum(self.sin_window) / len(self.sin_window)
+        avg_cos = sum(self.cos_window) / len(self.cos_window)
+
+        # Calculate the average orientation
+        orientation = math.atan2(avg_sin, avg_cos)
+
+        # Convert to degrees
+        orientation = math.degrees(orientation)
+        orientation = orientation % 360
+
+        return orientation
 
 def main(args=None):
     rclpy.init(args=args)
