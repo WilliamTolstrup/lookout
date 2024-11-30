@@ -97,14 +97,20 @@ class DetectRobot(Node):
 
             camera_robot_position, camera_robot_orientation, front_midpoint, rear_midpoint = self.calculate_robot_pose(front_center, rear_center, camera_id)
 
-            if camera_robot_position and camera_robot_orientation is None:
-                self.get_logger().warn(f"Cannot calculate robot position from camera {camera_id}.", once=True)
-                weight = 0
-                world_robot_position = None
             if camera_robot_orientation is None:
                 self.get_logger().warn(f"Cannot calculate robot orientation from camera {camera_id}.", once=True)
                 weight = 0
                 camera_robot_orientation = None
+            if camera_robot_position is None:
+                self.get_logger().warn(f"Cannot calculate robot position from camera {camera_id}.", once=True)
+                weight = 0
+                world_robot_position = None
+            if camera_robot_position and camera_robot_orientation is None:
+                self.get_logger().warn(f"Cannot calculate robot position and orientation from camera {camera_id}.", once=True)
+                weight = 0
+                world_robot_position = None
+                camera_robot_orientation = None
+
 
             elif camera_robot_position and camera_robot_orientation is not None:
                 world_robot_position = self.homography_transform(homography_matrix, camera_robot_position)
