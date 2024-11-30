@@ -31,34 +31,21 @@ class DetectRobot(Node):
         # Initialize variables
         self.previous_orientation = {1: None, 2: None}
 
-        # self.image1 = None
-        # self.image2 = None
-
         # Start subscription and publisher
-    #    self.get_image1_raw = self.create_subscription(Image, '/camera1/image_raw', self.image1_callback, 10)
-    #    self.get_image2_raw = self.create_subscription(Image, '/camera2/image_raw', self.image2_callback, 10)
         self.image1_sub = Subscriber(self, Image, '/camera1/image_raw')
         self.image2_sub = Subscriber(self, Image, '/camera2/image_raw')
         self.pub_image1_processed = self.create_publisher(Image, 'camera1/image_processed', 10)
         self.pub_image2_processed = self.create_publisher(Image, 'camera2/image_processed', 10)
-        self.pub_pos_angle = self.create_publisher(Vector3, '/robot/position_angle', 10)
+        self.pub_pose = self.create_publisher(Vector3, '/robot/pose', 10)
 
         # Synchronize image topics
         self.synchronizer = ApproximateTimeSynchronizer([self.image1_sub, self.image2_sub], queue_size=10, slop=0.1)
         self.synchronizer.registerCallback(self.callback)
 
-    def convert_between_ros2_and_opencv(self, img, parameter="ROS2_to_CV2"):
-        if parameter == "ROS2_to_CV2":
-            return bridge.imgmsg_to_cv2(img, desired_encoding='bgr8')
-        elif parameter == "CV2_to_ROS2":
-            return bridge.cv2_to_imgmsg(img)
-        else:
-            self.get_logger().warn("Parameter not set! Use either: ROS2_to_CV2 or CV2_to_ROS2")
-
     def callback(self, img1, img2):
         # Convert ROS Image to OpenCV image
-        self.image1 = self.convert_between_ros2_and_opencv(img1, parameter="ROS2_to_CV2")
-        self.image2 = self.convert_between_ros2_and_opencv(img2, parameter="ROS2_to_CV2")
+        self.image1 = bridge.imgmsg_to_cv2(img1, desired_encoding='bgr8')
+        self.image2 = bridge.imgmsg_to_cv2(img2, desired_encoding='bgr8')
         self.get_logger().info("Images received", once=True)
 
         world_robot_position1, camera_robot_orientation1, weight1, front_midpoint1, rear_midpoint1 = self.loop(self.image1, 1)
@@ -70,7 +57,6 @@ class DetectRobot(Node):
         weight2 = weight2 / weight_total if weight_total != 0 else 0
        # self.get_logger().info(f"Weight1: {weight1}, Weight2: {weight2}")
         self.get_logger().info(f"Orientation1: {camera_robot_orientation1}, Orientation2: {camera_robot_orientation2}")
-
 
 
         # Fuse the data
@@ -121,16 +107,6 @@ class DetectRobot(Node):
 
             return world_robot_position, camera_robot_orientation, weight, front_midpoint, rear_midpoint
 
-    # def image1_callback(self, msg):
-    #     # Convert ROS Image to OpenCV image
-    #     self.image1 = self.convert_between_ros2_and_opencv(msg, parameter="ROS2_to_CV2")
-    #     self.get_logger().info("Image 1 received", once=True)
-
-    # def image2_callback(self, msg):
-    #     # Convert ROS Image to OpenCV image
-    #     self.image2 = self.convert_between_ros2_and_opencv(msg, parameter="ROS2_to_CV2")
-    #     self.get_logger().info("Image 2 received", once=True)
-
     def find_wheels(self, img):
         """
         Detect wheels in the image and calculate the robot's pose.
@@ -155,27 +131,6 @@ class DetectRobot(Node):
 
         return red_mask, blue_mask
 
-        # Detect wheel centers
-        red_centers = self.detect_wheel_centers(red_mask)
-        blue_centers = self.detect_wheel_centers(blue_mask)
-    
-        # Calculate pose
-        robot_position, robot_orientation, front_midpoint, rear_midpoint = self.calculate_robot_pose(red_centers, blue_centers)
-
-        return robot_position, robot_orientation, front_midpoint, rear_midpoint
-
-        # Debugging output on image
-        if robot_position is not None:
-            cv2.putText(img, f"Position: {robot_position}", (50, 50),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
-            cv2.putText(img, f"Orientation: {robot_orientation:.2f} degrees", (50, 80),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
-
-        return img, (robot_position, robot_orientation)
-
-
-
-
     def detect_wheel_centers(self, mask):
         """
         Detect wheel centers from a mask.
@@ -193,6 +148,16 @@ class DetectRobot(Node):
                 centers.append((x, y))
         return centers
 
+    def normalize_angle(self, angle):
+        """
+        Normalize an angle to the range [-180, 180] degrees.
+        :param angle: The angle to normalize.
+        :return: The normalized angle.
+        """
+        angle = angle % 360
+        if angle < 0:
+            angle += 360
+        return angle
 
     def calculate_robot_pose(self, front_centers, rear_centers, camera_id):
         """
@@ -238,14 +203,19 @@ class DetectRobot(Node):
                 dx = front_midpoint[0] - rear_midpoint[0]
                 dy = front_midpoint[1] - rear_midpoint[1]
             robot_orientation = math.atan2(dy, dx) * 180 / math.pi  # Angle in degrees
+            robot_orientation = self.normalize_angle(robot_orientation)
+            robot_orientation = self.validate_orientation(self.previous_orientation[camera_id], robot_orientation)
+            self.previous_orientation[camera_id] = robot_orientation
 
         # Fallbacks if one of the midpoints is missing
         elif front_midpoint is not None:
             robot_position = front_midpoint
-            robot_orientation = self.previous_orientation[camera_id]
+            robot_orientation = None
+
         elif rear_midpoint is not None:
             robot_position = rear_midpoint
-            robot_orientation = self.previous_orientation[camera_id]
+            robot_orientation = None
+
         else:
             robot_position = None
             robot_orientation = None
@@ -254,16 +224,34 @@ class DetectRobot(Node):
         if robot_position is not None:
             robot_position = round(robot_position[0], 2), round(robot_position[1], 2)
         
-        # if robot_orientation is not None:
-        #     # Filter orientation to prevent sudden changes
-        #     if self.previous_orientation[camera_id] is not None:
-        #         if abs(robot_orientation - self.previous_orientation[camera_id]) > 90:
-        #             robot_orientation = self.previous_orientation[camera_id]
-        #     self.previous_orientation[camera_id] = robot_orientation
-
-
         return robot_position, robot_orientation, front_midpoint, rear_midpoint
 
+    def validate_orientation(self, previous_orientation, current_orientation, max_change=10):
+        """
+        Validate the current orientation based on the previous orientation.
+        :param previous_orientation: The previous orientation.
+        :param current_orientation: The current orientation.
+        :return: The validated orientation.
+        """
+
+        if current_orientation is None:
+            return previous_orientation
+
+        if previous_orientation is None:
+            # No reference orientation available, accept the new orientation
+            return current_orientation
+
+
+        change = abs(current_orientation - previous_orientation)
+        # Normalize change for wrapping cases (e.g 359 to 1 deg)
+        change = min(change, 360 - change)
+
+        if change > max_change:
+            # Reject the new orientation
+            return previous_orientation
+
+        # Else accept the new orientation
+        return current_orientation
 
     def homography_transform(self, homography_matrix, pixel_point):
         """
@@ -286,9 +274,9 @@ class DetectRobot(Node):
     def calculate_weights(self, world_robot_pos, camera_world_position):
         """
         Calculate weights for two robot positions based on distance to the cameras.
-        :param world_robot_pos1: The robot's world position from camera 1.
-        :param world_robot_pos2: The robot's world position from camera 2.
-        :return: The weights for each position.
+        :param world_robot_pos: The robot's world position
+        :param camera_world_position: The camera's world position.
+        :return: The weight for the camera.
         """
         robot_z = 0  # Assume robot is on the ground
         # Calculate distances from the robot to each camera
@@ -302,9 +290,13 @@ class DetectRobot(Node):
     def weighted_data_fusion(self, world_robot_pos1, world_robot_pos2, orientation1, orientation2, weight1, weight2):
         """
         Fuse two sets of position and orientation data using a weighted average.
-        :param pos_ang1: Tuple containing (position, orientation) from the first source.
-        :param pos_ang2: Tuple containing (position, orientation) from the second source.
-        :return: Tuple containing the fused (position, orientation).
+        :param world_robot_pos1: The robot's world position from the first source.
+        :param world_robot_pos2: The robot's world position from the second source.
+        :param orientation1: The robot's orientation from the first source.
+        :param orientation2: The robot's orientation from the second source.
+        :param weight1: The camera weight for camera1.
+        :param weight2: The camera weight for camera2.
+        :return: Fused position and orientation.
         """
 
         # Normalize weights
@@ -319,7 +311,18 @@ class DetectRobot(Node):
                 norm_weight1 * world_robot_pos1[1] + norm_weight2 * world_robot_pos2[1],
             )
             
-            orientation = norm_weight1 * orientation1 + norm_weight2 * orientation2 # Try / total_weight later
+            orientation1_rad = math.radians(orientation1)
+            orientation2_rad = math.radians(orientation2)
+
+            sin_sum = norm_weight1 * math.sin(orientation1_rad) + norm_weight2 * math.sin(orientation2_rad)
+            cos_sum = norm_weight1 * math.cos(orientation1_rad) + norm_weight2 * math.cos(orientation2_rad)
+
+            fused_orientation_rad = math.atan2(sin_sum, cos_sum)
+
+            orientation = math.degrees(fused_orientation_rad)
+            orientation = self.normalize_angle(orientation)
+
+            #orientation = (norm_weight1 * orientation1 + norm_weight2 * orientation2)/total_weight # Try / total_weight later
 
         elif weight1 == 0 or orientation1 is None or world_robot_pos1 is None:
             position = world_robot_pos2
@@ -359,38 +362,39 @@ class DetectRobot(Node):
         return img
 
 
-    def publish_msgs(self, img1_msg, img2_msg, pos_ang_msg):
+    def publish_msgs(self, img1, img2, pose):
         """
         Publish processed image and robot position + orientation.
-        :param img_msg: The processed image to publish.
-        :param pos_ang_msg: Tuple containing (position, orientation).
+        :param img1: image1 to publish.
+        :param img2: image2 to publish.
+        :param pose: Tuple containing (position, orientation).
         """
         # Ensure pos_ang_msg contains three values
-        if pos_ang_msg is None or len(pos_ang_msg) < 2:
+        if pose is None or len(pose) < 2:
             self.get_logger().warn("Invalid pose data. Skipping publish.", once=True)
             return
 
         # Fill in default values if data is incomplete
       #  robot_position = pos_ang_msg[0] if pos_ang_msg[0] else (0.0, 0.0)
-        if pos_ang_msg[0] is None or not isinstance(pos_ang_msg[0], (tuple, list, np.ndarray)) or np.all(pos_ang_msg[0] == 0):
+        if pose[0] is None or not isinstance(pose[0], (tuple, list, np.ndarray)) or np.all(pose[0] == 0):
             robot_position = (0.0, 0.0)
         else:
-            robot_position = pos_ang_msg[0]
+            robot_position = pose[0]
             
-        robot_orientation = pos_ang_msg[1] if len(pos_ang_msg) > 1 else 0.0
+        robot_orientation = pose[1] if len(pose) > 1 else 0.0
 
         # Prepare and publish the position message
-        position_angle_msg = Vector3()
-        position_angle_msg.x = robot_position[0]
-        position_angle_msg.y = robot_position[1]
-        position_angle_msg.z = robot_orientation
-        self.pub_pos_angle.publish(position_angle_msg)
+        pose_msg = Vector3()
+        pose_msg.x = robot_position[0]
+        pose_msg.y = robot_position[1]
+        pose_msg.z = robot_orientation
+        self.pub_pose.publish(pose_msg)
 
         # Publish processed images
-        image1_processed_msg = self.convert_between_ros2_and_opencv(img1_msg, parameter="CV2_to_ROS2")
+        image1_processed_msg = bridge.cv2_to_imgmsg(img1)
         if image1_processed_msg is not None:
             self.pub_image1_processed.publish(image1_processed_msg)
-        image2_processed_msg = self.convert_between_ros2_and_opencv(img2_msg, parameter="CV2_to_ROS2")
+        image2_processed_msg = bridge.cv2_to_imgmsg(img2)
         if image2_processed_msg is not None:
             self.pub_image2_processed.publish(image2_processed_msg)
 
