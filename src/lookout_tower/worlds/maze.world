@@ -56,8 +56,9 @@
           </geometry>
           <material>
             <script>
-              <uri>file://media/materials/scripts/gazebo.material</uri>
-              <name>Gazebo/Grey</name>
+              <uri>file:///home/william/repos/lookout/src/models/materials/scripts</uri>
+              <uri>file:///home/william/repos/lookout/src/models/materials/textures</uri>
+              <name>Custom/WoodenFloor</name>
             </script>
           </material>
         </visual>
@@ -481,6 +482,34 @@
             <script>
               <uri>file://media/materials/scripts/gazebo.material</uri>
               <name>Gazebo/Yellow</name>
+            </script>
+          </material>
+        </visual>
+        <self_collide>0</self_collide>
+        <enable_wind>0</enable_wind>
+        <kinematic>0</kinematic>
+      </link>
+    </model>
+
+    <model name='Rug'>
+      <static>1</static>
+      <link name='link'>
+        <pose>-0.5 2.0 0 0</pose>
+        <visual name='visual'>
+          <cast_shadows>0</cast_shadows>
+          <geometry>
+            <plane>
+              <normal>0 0 1</normal>
+              <size>2 2</size>
+            </plane>
+          </geometry>
+          <material>
+            <script>
+              <uri>file:///home/william/repos/lookout/src/models/materials/scripts</uri>
+              <uri>file:///home/william/repos/lookout/src/models/materials/textures</uri>
+              <name>Custom/Rug</name>
+              <!-- <uri>file://media/materials/scripts/gazebo.material</uri>
+              <name>Gazebo/Grey</name> -->
             </script>
           </material>
         </visual>

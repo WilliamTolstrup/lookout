@@ -39,6 +39,8 @@ class DetectRobot(Node):
         self.image2_sub = Subscriber(self, Image, '/camera2/image_raw')
         self.pub_image1_processed = self.create_publisher(Image, 'camera1/image_processed', 10)
         self.pub_image2_processed = self.create_publisher(Image, 'camera2/image_processed', 10)
+        self.pub_image1_processed_debug = self.create_publisher(Image, 'camera1/image_processed_debug', 10)
+        self.pub_image2_processed_debug = self.create_publisher(Image, 'camera2/image_processed_debug', 10)
         self.pub_pose = self.create_publisher(Vector3, '/robot/pose', 10)
 
         # Synchronize image topics
@@ -51,8 +53,8 @@ class DetectRobot(Node):
         self.image2 = bridge.imgmsg_to_cv2(img2, desired_encoding='bgr8')
         self.get_logger().info("Images received", once=True)
 
-        world_robot_position1, camera_robot_orientation1, weight1, front_midpoint1, rear_midpoint1 = self.loop(self.image1, 1)
-        world_robot_position2, camera_robot_orientation2, weight2, front_midpoint2, rear_midpoint2 = self.loop(self.image2, 2)
+        world_robot_position1, camera_robot_orientation1, weight1, front_midpoint1, rear_midpoint1, front_wheels1, rear_wheels1 = self.loop(self.image1, 1)
+        world_robot_position2, camera_robot_orientation2, weight2, front_midpoint2, rear_midpoint2, front_wheels2, rear_wheels2 = self.loop(self.image2, 2)
 
         # Normalise weights for logging
         weight_total = weight1 + weight2
@@ -76,6 +78,7 @@ class DetectRobot(Node):
 
         # Publish the messages
         self.publish_msgs(self.image1, self.image2, (fused_position, fused_orientation))
+        self.publish_msgs(front_wheels1, front_wheels2, debug=True)
 
     def loop(self, img, camera_id):
 
@@ -116,16 +119,12 @@ class DetectRobot(Node):
                 world_robot_position = self.homography_transform(homography_matrix, camera_robot_position)
                 weight = self.calculate_weights(world_robot_position, camera_world_position)
 
-            return world_robot_position, camera_robot_orientation, weight, front_midpoint, rear_midpoint
+            return world_robot_position, camera_robot_orientation, weight, front_midpoint, rear_midpoint, front_wheels, rear_wheels
 
     def find_wheels(self, img):
         """
-        Detect wheels in the image and calculate the robot's pose.
+        Detect wheels in the image
         """
-        # Initialize pose variables
-        robot_position = None
-        robot_orientation = None
-
         # Convert to HSV
         hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
 
@@ -140,15 +139,20 @@ class DetectRobot(Node):
         red_mask = cv2.bitwise_or(red_mask_1, red_mask_2)
         blue_mask = cv2.inRange(hsv, blue_lower, blue_upper)
 
+        # Erode and dilate masks to remove noise
+        kernel = np.ones((5, 5), np.uint8)
+        red_mask = cv2.erode(red_mask, kernel, iterations=1)
+        red_mask = cv2.dilate(red_mask, kernel, iterations=1)
+        blue_mask = cv2.erode(blue_mask, kernel, iterations=1)
+        blue_mask = cv2.dilate(blue_mask, kernel, iterations=1)
+
+
         return red_mask, blue_mask
 
     def detect_wheel_centers(self, mask):
         """
         Detect wheel centers from a mask.
         :param mask: Binary mask for the color.
-        :param img: Image for debugging.
-        :param debug_image: Whether to draw debug circles.
-        :param color_name: Name of the color ("red" or "blue").
         :return: List of (x, y) positions for detected wheels.
         """
         contours, _ = cv2.findContours(mask, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
@@ -373,41 +377,52 @@ class DetectRobot(Node):
         return img
 
 
-    def publish_msgs(self, img1, img2, pose):
+    def publish_msgs(self, img1, img2, pose=None, debug=False):
         """
         Publish processed image and robot position + orientation.
         :param img1: image1 to publish.
         :param img2: image2 to publish.
         :param pose: Tuple containing (position, orientation).
         """
-        # Ensure pos_ang_msg contains three values
-        if pose is None or len(pose) < 2:
-            self.get_logger().warn("Invalid pose data. Skipping publish.", once=True)
-            return
-
-        # Fill in default values if data is incomplete
-      #  robot_position = pos_ang_msg[0] if pos_ang_msg[0] else (0.0, 0.0)
-        if pose[0] is None or not isinstance(pose[0], (tuple, list, np.ndarray)) or np.all(pose[0] == 0):
-            robot_position = (0.0, 0.0)
+        
+        if debug == True:
+            # Publish processed images
+            image1_processed_msg = bridge.cv2_to_imgmsg(img1)
+            if image1_processed_msg is not None:
+                self.pub_image1_processed_debug.publish(image1_processed_msg)
+            image2_processed_msg = bridge.cv2_to_imgmsg(img2)
+            if image2_processed_msg is not None:
+                self.pub_image2_processed_debug.publish(image2_processed_msg)
+        
         else:
-            robot_position = pose[0]
-            
-        robot_orientation = pose[1] if len(pose) > 1 else 0.0
+            # Ensure pos_ang_msg contains three values
+            if pose is None or len(pose) < 2:
+                self.get_logger().warn("Invalid pose data. Skipping publish.", once=True)
+                return
 
-        # Prepare and publish the position message
-        pose_msg = Vector3()
-        pose_msg.x = robot_position[0]
-        pose_msg.y = robot_position[1]
-        pose_msg.z = robot_orientation
-        self.pub_pose.publish(pose_msg)
+            # Fill in default values if data is incomplete
+        #  robot_position = pos_ang_msg[0] if pos_ang_msg[0] else (0.0, 0.0)
+            if pose[0] is None or not isinstance(pose[0], (tuple, list, np.ndarray)) or np.all(pose[0] == 0):
+                robot_position = (0.0, 0.0)
+            else:
+                robot_position = pose[0]
+                
+            robot_orientation = pose[1] if len(pose) > 1 else 0.0
 
-        # Publish processed images
-        image1_processed_msg = bridge.cv2_to_imgmsg(img1)
-        if image1_processed_msg is not None:
-            self.pub_image1_processed.publish(image1_processed_msg)
-        image2_processed_msg = bridge.cv2_to_imgmsg(img2)
-        if image2_processed_msg is not None:
-            self.pub_image2_processed.publish(image2_processed_msg)
+            # Prepare and publish the position message
+            pose_msg = Vector3()
+            pose_msg.x = robot_position[0]
+            pose_msg.y = robot_position[1]
+            pose_msg.z = robot_orientation
+            self.pub_pose.publish(pose_msg)
+
+            # Publish processed images
+            image1_processed_msg = bridge.cv2_to_imgmsg(img1)
+            if image1_processed_msg is not None:
+                self.pub_image1_processed.publish(image1_processed_msg)
+            image2_processed_msg = bridge.cv2_to_imgmsg(img2)
+            if image2_processed_msg is not None:
+                self.pub_image2_processed.publish(image2_processed_msg)
 
 
 class OrientationFilter:

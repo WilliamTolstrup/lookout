@@ -1,0 +1,17 @@
+material Custom/WoodenFloor
+{
+    receive_shadows off
+    technique
+    {
+        pass
+        {
+            texture_unit
+            {
+                texture wooden_floor.jpg
+                scale 0.1 0.1
+                tex_address_mode wrap
+            }
+        }
+    }
+}
+
