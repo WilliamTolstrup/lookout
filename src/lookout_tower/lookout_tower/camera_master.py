@@ -24,12 +24,13 @@ class DetectRobot(Node):
                                             [-2.33900048e-19, -4.91739553e-01,  1.40637512e+02],
                                             [3.63601262e-20,  1.07871720e-01,  1.00000000e+00]])
 
-        self.homography_matrix2 = np.array([[-4.03860312e-01,  3.60729010e-02,  1.29154583e+02],
-                                             [2.52468441e-18,  1.00867758e+00, -1.65423123e+02],
-                                             [4.25339981e-04,  1.30096820e-01,  1.00000000e+00]])
+        self.homography_matrix2 = np.array([[-7.33161066e-01,  5.77134411e-02,  2.35274687e+02]
+                                            [ 7.49145477e-03,  1.95526970e+00, -3.02437521e+02]
+                                            [ 2.36485776e-03,  2.38392444e-01,  1.00000000e+00]])
         
-        self.camera1_world_position = np.array([0.0, -2.9, 3.0])
-        self.camera2_world_position = np.array([0.0, 6.1, 3.0])
+
+        self.camera1_world_position = np.array([0.0, -2.9, 3.0]) # TODO: Figure out how to get these from .yaml file
+        self.camera2_world_position = np.array([0.0, 6.6, 3.0])
 
         # Initialize variables
         self.previous_orientation = {1: None, 2: None}

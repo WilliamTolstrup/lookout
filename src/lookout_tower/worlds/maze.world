@@ -663,7 +663,7 @@
       <model name="camera_model_2">
         <static>true</static> <!-- Ensures camera stays in a fixed position -->
         <link name="camera_link_2">
-          <pose>0.0 6.1 3 0 0.50 -1.57</pose>
+          <pose>0.0 6.6 3 0 0.50 -1.57</pose>
 
           <!-- Visual Representation of Camera -->
           <visual name="camera_visual_2">

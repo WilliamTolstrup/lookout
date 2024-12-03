@@ -20,10 +20,10 @@ world_points = np.array([
 
 # Camera 2
 image_points = np.array([
-    [582, 349],
-    [8, 347],
-    [446, 164],
-    [168, 164]
+    [551, 307],
+    [42, 306],
+    [438, 153],
+    [177, 154]
 ], dtype=np.float32)
 
 # Compute the Homography matrix
@@ -46,7 +46,7 @@ def pixel_to_world(homography_matrix, pixel_point):
     return world_point
 
 # Example usage
-pixel_point = np.array([582, 349], dtype=np.float32)
+pixel_point = np.array([551, 307], dtype=np.float32)
 world_point = pixel_to_world(homography_matrix, pixel_point)
 print("World Point:")
 print(world_point)
