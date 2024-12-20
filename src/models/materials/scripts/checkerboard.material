@@ -1,0 +1,15 @@
+material Custom/Checkerboard
+{
+    receive_shadows off
+    technique
+    {
+        pass
+        {
+            texture_unit
+            {
+                texture checkerboard.jpg
+            }
+        }
+    }
+}
+

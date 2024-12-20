@@ -1,110 +1,96 @@
-import math
+import rclpy
+from rclpy.node import Node
+from ament_index_python.packages import get_package_share_directory
+
+from sensor_msgs.msg import Image
+from geometry_msgs.msg import Vector3
+from message_filters import ApproximateTimeSynchronizer, Subscriber
+from nav_msgs.msg import OccupancyGrid
+from std_msgs.msg import Header
+
+
 import numpy as np
 import cv2
+from cv_bridge import CvBridge
+import yaml
+import camera_commons
+from math import radians
+import matplotlib.pyplot as plt
 
-intrinsic_matrix = np.array([[343.50, 0.0, 320.0],
-                             [0.0, 343.50, 180.0],
-                             [0.0, 0.0, 1.0]])
+bridge = CvBridge()
 
-def rotation_matrix(roll, pitch, yaw):
-    """
-    Create a rotation matrix from roll, pitch, and yaw angles.
-    :param roll: The roll angle.
-    :param pitch: The pitch angle.
-    :param yaw: The yaw angle.
-    :return: The rotation matrix.
-    """
-    # Roll
-    R_x = np.array([[1, 0, 0],
-                    [0, math.cos(roll), -math.sin(roll)],
-                    [0, math.sin(roll), math.cos(roll)]])
+class TestingScript(Node):
+    def __init__(self):
+        super().__init__('floor_projection')
 
-    # Pitch
-    R_y = np.array([[math.cos(pitch), 0, math.sin(pitch)],
-                    [0, 1, 0],
-                    [-math.sin(pitch), 0, math.cos(pitch)]])
+        self.checkerboard_size = (3, 4)  # 4 squares in x, 5 squares in y
+        self.square_size = 0.5  # Size of each square in meters
 
-    # Yaw
-    R_z = np.array([[math.cos(yaw), -math.sin(yaw), 0],
-                    [math.sin(yaw), math.cos(yaw), 0],
-                    [0, 0, 1]])
+        self.image1_sub = Subscriber(self, Image, '/camera1/image_raw')
+        self.image2_sub = Subscriber(self, Image, '/camera2/image_raw')
 
-    # Combine the rotation matrices
-    R = np.dot(R_z, np.dot(R_y, R_x))
+        # Synchronize image topics
+        self.synchronizer = ApproximateTimeSynchronizer([self.image1_sub, self.image2_sub], queue_size=10, slop=0.1)
+        self.synchronizer.registerCallback(self.image_callback)
 
-    return R
+    def image_callback(self, img1, img2):
+        # Convert ROS Image to OpenCV image
+        self.image1 = bridge.imgmsg_to_cv2(img1, desired_encoding='bgr8')
+        self.image2 = bridge.imgmsg_to_cv2(img2, desired_encoding='bgr8')
+        self.get_logger().info("Images received", once=True)
 
+        # Generate 3D world points for the checkerboard
+        world_points = []
+        for i in range(self.checkerboard_size[1]):  # y-axis
+            for j in range(self.checkerboard_size[0]):  # x-axis
+                world_points.append([j * self.square_size, i * self.square_size, 0])
+        world_points = np.array(world_points, dtype=np.float32)
 
-def translation_vector(x, y, z):
-    """
-    Create a translation vector from x, y, and z coordinates.
-    :param x: The x coordinate.
-    :param y: The y coordinate.
-    :param z: The z coordinate.
-    :return: The translation vector.
-    """
-    t = np.array([x, y, z])
+        gray1 = cv2.cvtColor(self.image1, cv2.COLOR_BGR2GRAY)
+        gray2 = cv2.cvtColor(self.image2, cv2.COLOR_BGR2GRAY)
 
-    return t
+        # Detect checkerboard corners
+        found1, corners1 = cv2.findChessboardCorners(gray1, self.checkerboard_size, None)
+        found2, corners2 = cv2.findChessboardCorners(gray2, self.checkerboard_size, None)
 
-def projection_matrix(intrinsic_matrix, extrinsic_matrix):
-    """
-    Create a projection matrix from the intrinsic and extrinsic matrices.
-    :param intrinsic_matrix: The intrinsic matrix.
-    :param extrinsic_matrix: The extrinsic matrix.
-    :return: The projection matrix.
-    """
-    # Get the rotation matrix
-    R = rotation_matrix(extrinsic_matrix[3], extrinsic_matrix[4], extrinsic_matrix[5])
+        if found1 and found2:
+            # Refine corner detection for higher accuracy
+            corners1 = cv2.cornerSubPix(gray1, corners1, (11, 11), (-1, -1),
+                                        criteria=(cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 30, 0.001))
+            corners2 = cv2.cornerSubPix(gray2, corners2, (11, 11), (-1, -1),
+                                        criteria=(cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 30, 0.001))
 
-    # Get the translation vector
-    t = translation_vector(extrinsic_matrix[0], extrinsic_matrix[1], extrinsic_matrix[2])
+            # Compute homography matrices for both cameras
+            homography1, _ = cv2.findHomography(world_points[:, :2], corners1[:, 0, :])
+            homography2, _ = cv2.findHomography(world_points[:, :2], corners2[:, 0, :])
 
-    # Combine the rotation matrix and translation vector
-    Rt = np.column_stack((R, t))
+            print("Homography Matrix for Camera 1:\n", homography1)
+            print("Homography Matrix for Camera 2:\n", homography2)
 
-    # Compute the projection matrix
-    P = np.dot(intrinsic_matrix, Rt)
+            # Validate the results by projecting world points into the image
+            # for point in world_points:
+            #     # Convert world point to homogeneous coordinates
+            #     wp_h = np.array([point[0], point[1], 1.0])
 
-    return P
+            #     # Project into camera 1 image
+            #     ip_h1 = homography1 @ wp_h
+            #     ip1 = ip_h1[:2] / ip_h1[2]  # Normalize by z
 
+            #     # Project into camera 2 image
+            #     ip_h2 = homography2 @ wp_h
+            #     ip2 = ip_h2[:2] / ip_h2[2]  # Normalize by z
 
-# Camera poses (extrinsic matrices)
-camera1_pose = np.array([0.0, -2.9, 3.0, 0.0, 0.50, 1.57]) # x, y, z, roll, pitch, yaw
-camera2_pose = np.array([0.0, 6.6, 3.0, 0.0, 0.50, -1.57]) # x, y, z, roll, pitch, yaw
+            #     print(f"World Point {point[:2]} -> Camera 1 Pixel {ip1} -> Camera 2 Pixel {ip2}")
 
-# Compute the projection matrices
-P1 = projection_matrix(intrinsic_matrix, camera1_pose)
-P2 = projection_matrix(intrinsic_matrix, camera2_pose)
+        else:
+            print("Checkerboard detection failed. Ensure it is visible in both images.")
 
-# World points
-world_points = np.array([
-    [-2, 4, 0, 1],
-    [3, 4, 0, 1],
-    [-2, 0, 0, 1],
-    [3, 0, 0, 1]
-], dtype=np.float32).T
-# Third row is Z=0 and fourth row is W=1 which is the homogeneous coordinate
+def main(args=None):
+    rclpy.init(args=args)
+    testing_node = TestingScript()
+    rclpy.spin(testing_node)
+    testing_node.destroy_node()
+    rclpy.shutdown()
 
-# Project the world points to camera planes
-image_points1 = np.dot(P1, world_points)
-image_points2 = np.dot(P2, world_points)
-
-# Normalize the image points
-image_points1 = image_points1 / image_points1[2]
-image_points2 = image_points2 / image_points2[2]
-
-# Extract the 2D points
-image_points1_2d = image_points1[:2].T
-image_points2_2d = image_points2[:2].T
-
-print("Third row of image_points1: ", image_points1[2])
-print("Third row of image_points2: ", image_points2[2])
-
-# Compute the homography matrix
-homography_matrix, status = cv2.findHomography(image_points1_2d, image_points2_2d) # camera1 to camera2 homography
-
-# Print results
-print("Image Points in Camera1:\n", image_points1_2d)
-print("Image Points in Camera2:\n", image_points2_2d)
-print("Homography Matrix:\n", homography_matrix)
+if __name__ == '__main__':
+    main()

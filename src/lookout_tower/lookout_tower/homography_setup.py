@@ -16,7 +16,7 @@ class ImageSubscriber(Node):
             '/camera2/image_raw',
             self.listener_callback,
             10)
-        self.publisher_ = self.create_publisher(Image, '/camera/image_processed', 10)
+        self.publisher_ = self.create_publisher(Image, '/camera2/image_processed', 10)
         self.bridge = CvBridge()
 
     def listener_callback(self, msg):

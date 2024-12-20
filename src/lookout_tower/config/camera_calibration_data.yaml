@@ -1,48 +1,29 @@
-/stereo_depth_node:
-  ros__parameters:
-    camera_common:
-      image_width: 640
-      image_height: 360
-      intrinsics_matrix:  [343.50, 0.0, 320.0, 
-                           0.0, 343.50, 180.0, 
-                           0.0, 0.0, 1.0]
-      baseline: 0.8
-      fov: 1.5
-      format: "R8G8B8"
-      clip_near: 0.1
-      clip_far: 200.0
+camera_common:
+  image_width: 640
+  image_height: 360
+  intrinsics_matrix:  [343.50, 0.0, 320.0, 
+                        0.0, 343.50, 180.0, 
+                        0.0, 0.0, 1.0]
+  baseline: 0.8
+  fov: 1.5
+  format: "R8G8B8"
+  clip_near: 0.1
+  clip_far: 200.0
 
-    camera1:
-      homography_matrix: 
-        rows: 3
-        cols: 3
-        data: [ 3.35276968e-01,  2.96404276e-02, -1.06713314e+02,
-               -2.33900048e-19, -4.91739553e-01,  1.40637512e+02,
-                3.63601262e-20,  1.07871720e-01,  1.00000000e+00]
+camera1:
+  world_coordinates:
+    x: 0.0
+    y: -2.9
+    z: 3.0
+    roll: 0.0
+    pitch: 0.50
+    yaw: 1.57
 
-
-      world_coordinates:
-        x: 0.0
-        y: -2.9
-        z: 3.0
-        roll: 0.0
-        pitch: 0.50
-        yaw: 1.57
-
-    camera2:
-      homography_matrix: 
-        rows: 3
-        cols: 3
-        data: [-7.33161066e-01,  5.77134411e-02,  2.35274687e+02,
-                7.49145477e-03,  1.95526970e+00, -3.02437521e+02,
-                2.36485776e-03,  2.38392444e-01,  1.00000000e+00]
-
-
-
-      world_coordinates:
-        x: 0.0
-        y: 6.6
-        z: 3.0
-        roll: 0.0
-        pitch: 0.50
-        yaw: 1.57
+camera2:
+  world_coordinates:
+    x: 0.0
+    y: 6.6
+    z: 3.0
+    roll: 0.0
+    pitch: 0.50
+    yaw: -1.57
