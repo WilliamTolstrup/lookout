@@ -140,6 +140,7 @@ class DetectRobot(Node):
         red_mask = cv2.bitwise_or(red_mask_1, red_mask_2)
         blue_mask = cv2.inRange(hsv, blue_lower, blue_upper)
 
+
         # Erode and dilate masks to remove noise
         kernel = np.ones((5, 5), np.uint8)
         red_mask = cv2.erode(red_mask, kernel, iterations=1)
