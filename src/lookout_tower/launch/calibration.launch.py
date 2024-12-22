@@ -1,18 +1,16 @@
 
 """
-Bare bones gazebo bringup with custom world and custom robot
+Calibration launch file to find homographies for two cameras
 """
 
 import os
-import xacro
 
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument, ExecuteProcess, IncludeLaunchDescription
+from launch.actions import DeclareLaunchArgument, ExecuteProcess, TimerAction, Shutdown
 from launch_ros.actions import Node
 from launch import LaunchDescription
 from launch.substitutions import LaunchConfiguration
-from launch.launch_description_sources import PythonLaunchDescriptionSource
 
 
 def generate_launch_description():
@@ -22,7 +20,6 @@ def generate_launch_description():
     world = LaunchConfiguration('world')
     simulator = LaunchConfiguration('simulator')
     use_sim_time = LaunchConfiguration('use_sim_time', default='true')
-    rviz_config = LaunchConfiguration("rviz_config")
 
     # Declare the launch arguments
     declare_world_cmd = DeclareLaunchArgument(
@@ -39,29 +36,27 @@ def generate_launch_description():
         'use_sim_time',
         default_value='true',
         description='Use sim time if true')
-    
-    declare_rviz_config_arg = DeclareLaunchArgument(
-        'rviz_config',
-        default_value=os.path.join(bringup_dir, 'config', 'view_robot.rviz'),
-        description="Absolute path to rviz config"
-    )
 
     # Start Gazebo with plugin providing the robot spawing service
     start_gazebo_cmd = ExecuteProcess(
         cmd=[simulator, '--verbose', '-s', 'libgazebo_ros_init.so',
-                                     '-s', 'libgazebo_ros_factory.so', world],
-        output='screen')
+                                     '-s', 'libgazebo_ros_factory.so', world,
+                                     '--log-level', 'fatal'],
+        output='log',
+        additional_env={"IGN_PARTITION": "quiet"})
 
-    # Open Rviz2 with config file
-    rviz2 = Node(
-        package="rviz2",
-        executable="rviz2",
-        name="rviz2",
+    # Run calibration node
+    calibration_node = Node(
+        package="lookout_tower",
+        executable="find_homographies",
+        name="calibration",
         output="screen",
-        parameters=[{'use_sim_time': use_sim_time}],
-        arguments=[
-            "-d", rviz_config
-        ]
+        arguments=["--ros-args", "--log-level", "info"],
+    )
+
+    shutdown_timer = TimerAction(
+        period=2.0,
+        actions=[Shutdown(reason="Calibration finished")],
     )
 
     
@@ -72,10 +67,10 @@ def generate_launch_description():
     ld.add_action(declare_simulator_cmd)
     ld.add_action(declare_world_cmd)
     ld.add_action(declare_use_sim_time)
-    ld.add_action(declare_rviz_config_arg)
 
     # Add the actions to start gazebo, robots and simulations
     ld.add_action(start_gazebo_cmd)
-    ld.add_action(rviz2)
+    ld.add_action(calibration_node)
+    ld.add_action(shutdown_timer)
 
     return ld

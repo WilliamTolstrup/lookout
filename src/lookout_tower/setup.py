@@ -31,6 +31,7 @@ setup(
     tests_require=['pytest'],
     entry_points={
         'console_scripts': [
+            'find_homographies = lookout_tower.find_homographies:main',
         ],
     },
 )
