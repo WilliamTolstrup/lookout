@@ -89,66 +89,14 @@ class FloorProjection(Node):
         self.get_logger().info("Images received", once=True)
 
         # Update the occupancy grids
-        #if self.static_occupancy_grid_flag is None:
         self.update_static_grid([self.image1, self.image2])
         self.publish_occupancy_grid(self.static_occupancy_grid.flatten().tolist(), self.grid_resolution, self.grid_width, self.grid_height, "static_map")
-        self.static_occupancy_grid_flag = True
 
         self.update_dynamic_grid(self.image1, self.image2)
         self.publish_occupancy_grid(self.dynamic_occupancy_grid.flatten().tolist(), self.grid_resolution, self.grid_width, self.grid_height, "dynamic_map")
-       # self.publish_occupancy_grid(self.static_occupancy_grid.flatten().tolist(), self.grid_resolution, self.grid_width, self.grid_height, "static_map")
 
         # Visualize the occupancy grids
         self.visualize_occupancy_grids()
-
-
-    def compute_robot_footprint(self, robot_pose):
-        # Define robot footprint in world coordinates
-        robot_length = 1.5  # meters
-        robot_width = 1.5  # meters
-
-        # Half the length and width
-        half_length = robot_length / 2
-        half_width = robot_width / 2
-
-        # Define the corners of the robot footprint
-        corners = np.array([
-            [-half_length, -half_width],
-            [half_length, -half_width],
-            [half_length, half_width],
-            [-half_length, half_width]
-        ])
-
-        # Compute the rotation matrix
-        rotation_matrix = np.array([
-            [np.cos(radians(robot_pose.z)), -np.sin(radians(robot_pose.z))],
-            [np.sin(radians(robot_pose.z)),  np.cos(radians(robot_pose.z))]
-        ])
-
-        # Rotate the corners
-        rotated_corners = rotation_matrix @ corners.T
-
-        # Translate the corners to the robot's position
-        translated_corners = rotated_corners.T + np.array([robot_pose.x, robot_pose.y])
-
-        return translated_corners
-    
-
-    def mark_robot_in_grid(self, occupancy_grid, robot_pose, grid_resolution, xmin, ymin):
-        # Compute the robot's footprint in world coordinates
-        robot_footprint = self.compute_robot_footprint(robot_pose)
-
-        # Get bounding box of the robot's footprint
-        x_coords = ((robot_footprint[:, 0] - xmin) / grid_resolution).astype(int)
-        y_coords = ((-robot_footprint[:, 1] - ymin) / grid_resolution).astype(int)
-
-        # Get min/max grid indices
-        min_x, max_x = np.clip([x_coords.min(), x_coords.max()], 0, occupancy_grid.shape[1] - 1)
-        min_y, max_y = np.clip([y_coords.min(), y_coords.max()], 0, occupancy_grid.shape[0] - 1)
-
-        # Mark the cells within the bounding box as drivable
-        occupancy_grid[min_y:max_y + 1, min_x:max_x + 1] = 255
-
 
     def drivable_space(self, img):
         hsv_img = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
@@ -211,10 +159,32 @@ class FloorProjection(Node):
                 np.argwhere(cleaned_mask == 255)[:, ::-1], np.linalg.inv(homography)
             )
             self.update_grid(self.static_occupancy_grid, world_coords)
+        self.add_robot_to_grid(self.static_occupancy_grid, self.robot_pose)
+
+    # def update_dynamic_grid(self, img1, img2):
+    #     # Apply temporal decay to the dynamic grid
+    #     self.dynamic_occupancy_grid = (self.dynamic_occupancy_grid * 0.4).astype(np.uint8) # Allows the detections to fade out over time
+
+    #     # Apply background subtraction on both images
+    #     fg_mask1 = self.bg_subtractor.apply(img1)
+    #     fg_mask2 = self.bg_subtractor.apply(img2)
+
+    #     # Threshold the foreground masks to isolate moving objects
+    #     _, thresh1 = cv2.threshold(fg_mask1, 200, 255, cv2.THRESH_BINARY)
+    #     _, thresh2 = cv2.threshold(fg_mask2, 200, 255, cv2.THRESH_BINARY)
+
+    #     # Process each camera image using thresholded masks
+    #     for thresh, homography in zip([thresh1, thresh2], [self.homography_matrix1, self.homography_matrix2]):
+    #         world_coords = camera_commons.pixels_to_world(
+    #             np.argwhere(thresh == 255)[:, ::-1], np.linalg.inv(homography)
+    #         )
+    #         self.update_grid(self.dynamic_occupancy_grid, world_coords)
 
     def update_dynamic_grid(self, img1, img2):
+        # Exclude points within a certain radius of the robot
+        exclusion_radius = 1.6 # Meters in world coordinates
         # Apply temporal decay to the dynamic grid
-        self.dynamic_occupancy_grid = (self.dynamic_occupancy_grid * 0.4).astype(np.uint8) # Allows the detections to fade out over time
+        self.dynamic_occupancy_grid = (self.dynamic_occupancy_grid * 0.4).astype(np.uint8)  # Allows the detections to fade out over time
 
         # Apply background subtraction on both images
         fg_mask1 = self.bg_subtractor.apply(img1)
@@ -226,44 +196,46 @@ class FloorProjection(Node):
 
         # Process each camera image using thresholded masks
         for thresh, homography in zip([thresh1, thresh2], [self.homography_matrix1, self.homography_matrix2]):
+            # Get world coordinates of moving objects
             world_coords = camera_commons.pixels_to_world(
                 np.argwhere(thresh == 255)[:, ::-1], np.linalg.inv(homography)
             )
-            self.update_grid(self.dynamic_occupancy_grid, world_coords)
 
-    def update_grid(self, grid, world_coords): ### NOTE: This function doesn't quite work as intended YET.
-        exclusion_zone = 0.5  # meters in world coordinates
+            valid_indices = (
+                (world_coords[:, 0] >= self.grid_min_x) &
+                (world_coords[:, 0] <= self.grid_max_x) &
+                (world_coords[:, 1] >= self.grid_min_y) &
+                (world_coords[:, 1] <= self.grid_max_y)
+            )
+            
+            # Filter out points near the robot
+            robot_x, robot_y = self.robot_pose.x, self.robot_pose.y
+            distances = np.sqrt((world_coords[:, 0] - robot_x) ** 2 +
+                                (world_coords[:, 1] - robot_y) ** 2)
+            exclusion_mask = (distances >= exclusion_radius) & valid_indices
 
+            # DEBUG
+            print(f"Robot pose: ({robot_x}, {robot_y})")
+            print(f"World coords: {world_coords[:5]}")
+            print(f"Distances: {distances[:5]}")
+
+            # Apply the exclusion mask
+            filtered_coords = world_coords[exclusion_mask]
+
+            # Update the grid with the filtered coordinates
+            self.update_grid(self.dynamic_occupancy_grid, filtered_coords)
+
+            self.add_robot_to_grid(self.dynamic_occupancy_grid, self.robot_pose)
+
+    def update_grid(self, grid, world_coords):
         # Convert world coordinates to grid indices and update the grid
         for coord in world_coords:
             x_idx = int((coord[0] - self.grid_min_x) / self.grid_resolution)
             y_idx = int((coord[1] - self.grid_min_y) / self.grid_resolution)
 
-            # Check if the coordinate is within the exclusion zone
-            if hasattr(self, 'robot_pose'):
-                robot_x = self.robot_pose.x
-                robot_y = self.robot_pose.y
-
-                # Distance check in world coordinates
-                if ((coord[0] - robot_x) ** 2 + (coord[1] - robot_y) ** 2) < exclusion_zone ** 2:
-                    continue
-
             # Ensure the indices are within the grid bounds
             if 0 <= x_idx < self.grid_width and 0 <= y_idx < self.grid_height:
                 grid[y_idx, x_idx] = 255  # Mark as occupied
-            
-       # grid[:] = cv2.morphologyEx(grid, cv2.MORPH_OPEN, np.ones((5, 5), np.uint8))
-
-
-    # def update_grid(self, grid, world_coords):
-    #     # Convert world coordinates to grid indices and update the grid
-    #     for coord in world_coords:
-    #         x_idx = int((coord[0] - self.grid_min_x) / self.grid_resolution)
-    #         y_idx = int((coord[1] - self.grid_min_y) / self.grid_resolution)
-
-    #         # Ensure the indices are within the grid bounds
-    #         if 0 <= x_idx < self.grid_width and 0 <= y_idx < self.grid_height:
-    #             grid[y_idx, x_idx] = 255  # Mark as occupied
             
     #    # grid[:] = cv2.morphologyEx(grid, cv2.MORPH_OPEN, np.ones((5, 5), np.uint8))
 
@@ -321,6 +293,15 @@ class FloorProjection(Node):
         # Display the combined image
       #  cv2.imshow("Occupancy Grids", combined_grid)
       #  cv2.waitKey(1)
+
+    def add_robot_to_grid(self, grid, robot_pose, marker_value=128):
+        # Convert robot pose (world coordinates) to grid indices
+        x_idx = int((robot_pose.x - self.grid_min_x) / self.grid_resolution)
+        y_idx = int((robot_pose.y - self.grid_min_y) / self.grid_resolution)
+
+        # Ensure indices are within grid bounds
+        if 0 <= x_idx < self.grid_width and 0 <= y_idx < self.grid_height:
+            grid[y_idx, x_idx] = marker_value  # Add robot position marker
 
 
 def main(args=None):

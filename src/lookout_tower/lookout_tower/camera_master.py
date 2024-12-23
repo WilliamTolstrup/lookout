@@ -10,6 +10,7 @@ import cv2
 from cv_bridge import CvBridge
 import math
 from collections import deque
+import camera_commons
 
 bridge = CvBridge()
 
@@ -20,13 +21,13 @@ class DetectRobot(Node):
         self.orientation_filter = OrientationFilter(window_size=25)
 
         # Initialize homography matrices
-        self.homography_matrix1 = np.array([[3.35276968e-01,  2.96404276e-02, -1.06713314e+02],
-                                            [-2.33900048e-19, -4.91739553e-01,  1.40637512e+02],
-                                            [3.63601262e-20,  1.07871720e-01,  1.00000000e+00]])
+        self.homography_matrix1 = np.array([[7.43359893e+01, -6.05110948e+01,  2.82275964e+02],
+                                            [1.86232912e-01,  1.48613961e+00,  2.44246163e+02],
+                                            [7.20071467e-04, -1.89563847e-01,  1.00000000e+00]]) # With checkerboard at 0, 0, 0
 
-        self.homography_matrix2 = np.array([[-7.33161066e-01,  5.77134411e-02,  2.35274687e+02],
-                                            [ 7.49145477e-03,  1.95526970e+00, -3.02437521e+02],
-                                            [ 2.36485776e-03,  2.38392444e-01,  1.00000000e+00]])
+        self.homography_matrix2 = np.array([[-5.50815917e+01,  3.78277731e+01,  3.45269719e+02],
+                                            [-2.45905106e+00,  3.68606000e+00,  1.63346149e+02],
+                                            [-1.31961493e-02,  1.18132825e-01,  1.00000000e+00]])
         
 
         self.camera1_world_position = np.array([0.0, -2.9, 3.0]) # TODO: Figure out how to get these from .yaml file
@@ -34,6 +35,7 @@ class DetectRobot(Node):
 
         # Initialize variables
         self.previous_orientation = {1: None, 2: None}
+        self.previous_position = {1: None, 2: None}
 
         # Start subscription and publisher
         self.image1_sub = Subscriber(self, Image, '/camera1/image_raw')
@@ -117,7 +119,8 @@ class DetectRobot(Node):
 
 
             elif camera_robot_position and camera_robot_orientation is not None:
-                world_robot_position = self.homography_transform(homography_matrix, camera_robot_position)
+                world_robot_position = camera_commons.point_to_world(camera_robot_position, np.linalg.inv(homography_matrix))
+               # world_robot_position = self.homography_transform(homography_matrix, camera_robot_position)
                 weight = self.calculate_weights(world_robot_position, camera_world_position)
 
             return world_robot_position, camera_robot_orientation, weight, front_midpoint, rear_midpoint, front_wheels, rear_wheels
@@ -234,13 +237,20 @@ class DetectRobot(Node):
             robot_orientation = None
 
         else:
-            robot_position = None
-            robot_orientation = None
+            # Use the previous position and orientation as fallback
+            robot_position = self.previous_position.get(camera_id, None)
+            robot_orientation = self.previous_orientation.get(camera_id, None)
+
+          #  robot_position = None
+          #  robot_orientation = None
 
         # Round the robot position to two decimal places
         if robot_position is not None:
             robot_position = round(robot_position[0], 2), round(robot_position[1], 2)
         
+        # Update the previous position for the next call
+        self.previous_position[camera_id] = robot_position
+
         return robot_position, robot_orientation, front_midpoint, rear_midpoint
 
     def validate_orientation(self, previous_orientation, current_orientation, max_change=10):
