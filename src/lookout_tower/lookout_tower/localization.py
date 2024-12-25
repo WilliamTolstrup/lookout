@@ -45,6 +45,7 @@ class DetectRobot(Node):
         self.pub_image1_processed_debug = self.create_publisher(Image, 'camera1/image_processed_debug', 10)
         self.pub_image2_processed_debug = self.create_publisher(Image, 'camera2/image_processed_debug', 10)
         self.pub_pose = self.create_publisher(Vector3, '/robot/pose', 10)
+        self.pub_weights = self.create_publisher(Vector3, '/robot/weights', 10)
 
         # Synchronize image topics
         self.synchronizer = ApproximateTimeSynchronizer([self.image1_sub, self.image2_sub], queue_size=10, slop=0.1)
@@ -82,6 +83,10 @@ class DetectRobot(Node):
         # Publish the messages
         self.publish_msgs(self.image1, self.image2, (fused_position, fused_orientation))
         self.publish_msgs(front_wheels1, front_wheels2, debug=True)
+        weight_msg = Vector3()
+        weight_msg.x = weight1
+        weight_msg.y = weight2
+        self.pub_weights.publish(weight_msg)
 
     def loop(self, img, camera_id):
 
