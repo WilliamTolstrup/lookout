@@ -36,6 +36,8 @@ class DetectRobot(Node):
         # Initialize variables
         self.previous_orientation = {1: None, 2: None}
         self.previous_position = {1: None, 2: None}
+        self.previous_weight1 = 0.0
+        self.previous_weight2 = 0.0
 
         # Start subscription and publisher
         self.image1_sub = Subscriber(self, Image, '/camera1/image_raw')
@@ -64,9 +66,6 @@ class DetectRobot(Node):
         weight_total = weight1 + weight2
         weight1 = weight1 / weight_total if weight_total != 0 else 0
         weight2 = weight2 / weight_total if weight_total != 0 else 0
-       # self.get_logger().info(f"Weight1: {weight1}, Weight2: {weight2}")
-        self.get_logger().info(f"Orientation1: {camera_robot_orientation1}, Orientation2: {camera_robot_orientation2}")
-
 
         # Fuse the data
         if weight1 + weight2 != 0:
@@ -75,18 +74,22 @@ class DetectRobot(Node):
             fused_orientation = self.orientation_filter.get_filtered_orientation()
         else:
             fused_position, fused_orientation = (0.0, 0.0), 0.0
-        self.get_logger().info(f"Fused position: {fused_position}, Fused orientation: {fused_orientation}")
+            
         # Annotate image
         self.image1 = self.annotate_image(self.image1, fused_position, fused_orientation, front_midpoint1, rear_midpoint1)
         self.image2 = self.annotate_image(self.image2, fused_position, fused_orientation, front_midpoint2, rear_midpoint2)
 
         # Publish the messages
         self.publish_msgs(self.image1, self.image2, (fused_position, fused_orientation))
-        self.publish_msgs(front_wheels1, front_wheels2, debug=True)
+        self.publish_msgs(front_wheels1, rear_wheels1, debug=True)
+        # Publish weights
         weight_msg = Vector3()
-        weight_msg.x = weight1
-        weight_msg.y = weight2
+        weight_msg.x = weight1 if weight1 > 0.0 else self.previous_weight1
+        weight_msg.y = weight2 if weight2 > 0.0 else self.previous_weight2
         self.pub_weights.publish(weight_msg)
+        self.previous_weight1 = weight_msg.x
+        self.previous_weight2 = weight_msg.y
+
 
     def loop(self, img, camera_id):
 
@@ -138,14 +141,14 @@ class DetectRobot(Node):
         hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
 
         # Red and blue thresholds
-        red_lower_1, red_upper_1 = (0, 50, 50), (10, 255, 255)
-        red_lower_2, red_upper_2 = (170, 50, 50), (180, 255, 255)
+        red_lower_1, red_upper_1 = (0, 50, 50), (0, 255, 255)
+       # red_lower_2, red_upper_2 = (170, 50, 50), (180, 255, 255)
         blue_lower, blue_upper = (100, 50, 50), (130, 255, 255)
 
         # Create masks
-        red_mask_1 = cv2.inRange(hsv, red_lower_1, red_upper_1)
-        red_mask_2 = cv2.inRange(hsv, red_lower_2, red_upper_2)
-        red_mask = cv2.bitwise_or(red_mask_1, red_mask_2)
+        red_mask = cv2.inRange(hsv, red_lower_1, red_upper_1)
+       # red_mask_2 = cv2.inRange(hsv, red_lower_2, red_upper_2)
+       # red_mask = cv2.bitwise_or(red_mask_1, red_mask_2)
         blue_mask = cv2.inRange(hsv, blue_lower, blue_upper)
 
 
@@ -169,7 +172,7 @@ class DetectRobot(Node):
         centers = []
         for contour in contours:
             (x, y), radius = cv2.minEnclosingCircle(contour)
-            if 1 < radius < 20:  # Filter based on radius
+            if 1 < radius < 200:  # Filter based on radius
                 centers.append((x, y))
         return centers
 

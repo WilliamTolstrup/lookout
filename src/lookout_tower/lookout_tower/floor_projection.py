@@ -3,12 +3,12 @@ from rclpy.node import Node
 from ament_index_python.packages import get_package_share_directory
 
 from sensor_msgs.msg import Image
-from geometry_msgs.msg import Vector3
+from geometry_msgs.msg import Vector3, Pose, Point
 from message_filters import ApproximateTimeSynchronizer, Subscriber
 from nav_msgs.msg import OccupancyGrid
 from std_msgs.msg import Header
 
-
+import random
 import numpy as np
 import cv2
 from cv_bridge import CvBridge
@@ -16,6 +16,7 @@ import yaml
 import camera_commons
 from math import radians
 import matplotlib.pyplot as plt
+import os
 
 bridge = CvBridge()
 
@@ -44,6 +45,7 @@ class FloorProjection(Node):
         self.floor_hsv_upper = np.array([95, 51, 255])
 
         self.robot_pose = Vector3()
+        self.weights = Vector3()
 
         self.static_occupancy_grid_flag = False
         self.static_occupancy_grid = None
@@ -52,7 +54,12 @@ class FloorProjection(Node):
         self.previous_frame_camera1 = None
         self.previous_frame_camera2 = None
 
-        self.bg_subtractor = cv2.createBackgroundSubtractorMOG2()
+        self.current_goal = None
+
+        self.bg_subtractor = cv2.createBackgroundSubtractorMOG2(history=500, varThreshold=50, detectShadows=False)
+        self.persistence_map = None
+        self.persistence_map_threshold = 50  # Number of frames to keep a detection in the dynamic grid
+        self.world_coords_stationary = None
 
         # Define grid resolution and bounds
         self.grid_resolution = 0.15  # Meters per cell
@@ -68,6 +75,7 @@ class FloorProjection(Node):
         self.robot_pose_sub = self.create_subscription(Vector3, '/robot/pose', self.robot_pose_callback, 10)
         self.image1_sub = Subscriber(self, Image, '/camera1/image_raw')
         self.image2_sub = Subscriber(self, Image, '/camera2/image_raw')
+        self.weights_sub = self.create_subscription(Vector3, 'robot/weights', self.weights_callback, 10)
 
         self.static_occupancy_grid_pub  = self.create_publisher(OccupancyGrid, '/static_map', 100)
         self.dynamic_occupancy_grid_pub = self.create_publisher(OccupancyGrid, '/dynamic_map', 100)
@@ -75,12 +83,19 @@ class FloorProjection(Node):
         self.static_ogm_pub  = self.create_publisher(Image, 'ogm/static_map', 10)
         self.dynamic_ogm_pub = self.create_publisher(Image, 'ogm/dynamic_map', 10)
 
+        self.goal_pub = self.create_publisher(Point, '/goal', 10)
+
+        self.debug_image_pub = self.create_publisher(Image, 'debug_image', 10) # DEBUG
+
         # Synchronize image topics
         self.synchronizer = ApproximateTimeSynchronizer([self.image1_sub, self.image2_sub], queue_size=10, slop=0.1)
         self.synchronizer.registerCallback(self.image_callback)
 
     def robot_pose_callback(self, msg):
         self.robot_pose = msg # Robot pose in world coordinates
+
+    def weights_callback(self, msg):
+        self.weights = msg
 
     def image_callback(self, img1, img2):
         # Convert ROS Image to OpenCV image
@@ -97,6 +112,14 @@ class FloorProjection(Node):
 
         # Visualize the occupancy grids
         self.visualize_occupancy_grids()
+
+        # Create a random goal for the robot to navigate to, and repeat when the goal is reached
+        if self.current_goal is None or self.check_distance_to_goal(self.current_goal.x, self.current_goal.y, self.robot_pose.x, self.robot_pose.y) < 1:
+            goal_x, goal_y = self.get_random_goal(self.static_occupancy_grid)
+            self.current_goal = Point(x=float(goal_x), y=float(goal_y), z=0.0)
+            self.get_logger().info(f"New goal: ({goal_x}, {goal_y})")
+        self.goal_pub.publish(self.current_goal)
+
 
     def drivable_space(self, img):
         hsv_img = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
@@ -150,6 +173,7 @@ class FloorProjection(Node):
         # Initialize static and dynamic grids
         self.static_occupancy_grid = np.zeros((self.grid_height, self.grid_width), dtype=np.uint8)
         self.dynamic_occupancy_grid = np.zeros((self.grid_height, self.grid_width), dtype=np.uint8)
+        self.persistence_map = np.zeros((self.grid_height, self.grid_width), dtype=np.uint8)
 
     def update_static_grid(self, images):
         # Process each camera image
@@ -159,30 +183,24 @@ class FloorProjection(Node):
                 np.argwhere(cleaned_mask == 255)[:, ::-1], np.linalg.inv(homography)
             )
             self.update_grid(self.static_occupancy_grid, world_coords)
+
+        if self.world_coords_stationary is not None:
+            self.update_grid(self.static_occupancy_grid, self.world_coords_stationary+255)
+
         self.add_robot_to_grid(self.static_occupancy_grid, self.robot_pose)
 
-    # def update_dynamic_grid(self, img1, img2):
-    #     # Apply temporal decay to the dynamic grid
-    #     self.dynamic_occupancy_grid = (self.dynamic_occupancy_grid * 0.4).astype(np.uint8) # Allows the detections to fade out over time
+        if self.current_goal is not None:
+            x_idx = int((self.current_goal.x - self.grid_min_x) / self.grid_resolution)
+            y_idx = int((self.current_goal.y - self.grid_min_y) / self.grid_resolution)
+            self.static_occupancy_grid[int(y_idx), int(x_idx)] = 128  # Mark the goal as occupied
 
-    #     # Apply background subtraction on both images
-    #     fg_mask1 = self.bg_subtractor.apply(img1)
-    #     fg_mask2 = self.bg_subtractor.apply(img2)
 
-    #     # Threshold the foreground masks to isolate moving objects
-    #     _, thresh1 = cv2.threshold(fg_mask1, 200, 255, cv2.THRESH_BINARY)
-    #     _, thresh2 = cv2.threshold(fg_mask2, 200, 255, cv2.THRESH_BINARY)
 
-    #     # Process each camera image using thresholded masks
-    #     for thresh, homography in zip([thresh1, thresh2], [self.homography_matrix1, self.homography_matrix2]):
-    #         world_coords = camera_commons.pixels_to_world(
-    #             np.argwhere(thresh == 255)[:, ::-1], np.linalg.inv(homography)
-    #         )
-    #         self.update_grid(self.dynamic_occupancy_grid, world_coords)
 
     def update_dynamic_grid(self, img1, img2):
         # Exclude points within a certain radius of the robot
-        exclusion_radius = 1.6 # Meters in world coordinates
+        exclusion_radius = 0.4 # Meters in world coordinates
+
         # Apply temporal decay to the dynamic grid
         self.dynamic_occupancy_grid = (self.dynamic_occupancy_grid * 0.4).astype(np.uint8)  # Allows the detections to fade out over time
 
@@ -198,7 +216,7 @@ class FloorProjection(Node):
         for thresh, homography in zip([thresh1, thresh2], [self.homography_matrix1, self.homography_matrix2]):
             # Get world coordinates of moving objects
             world_coords = camera_commons.pixels_to_world(
-                np.argwhere(thresh == 255)[:, ::-1], np.linalg.inv(homography)
+                np.argwhere(thresh == 0)[:, ::-1], np.linalg.inv(homography)
             )
 
             valid_indices = (
@@ -207,6 +225,7 @@ class FloorProjection(Node):
                 (world_coords[:, 1] >= self.grid_min_y) &
                 (world_coords[:, 1] <= self.grid_max_y)
             )
+
             
             # Filter out points near the robot
             robot_x, robot_y = self.robot_pose.x, self.robot_pose.y
@@ -214,52 +233,70 @@ class FloorProjection(Node):
                                 (world_coords[:, 1] - robot_y) ** 2)
             exclusion_mask = (distances >= exclusion_radius) & valid_indices
 
-            # DEBUG
-            print(f"Robot pose: ({robot_x}, {robot_y})")
-            print(f"World coords: {world_coords[:5]}")
-            print(f"Distances: {distances[:5]}")
-
             # Apply the exclusion mask
             filtered_coords = world_coords[exclusion_mask]
 
-            # Update the grid with the filtered coordinates
-            self.update_grid(self.dynamic_occupancy_grid, filtered_coords)
+        self.world_coords_stationary = self.detect_stationary_obstacles(world_coords)
 
-            self.add_robot_to_grid(self.dynamic_occupancy_grid, self.robot_pose)
+        # Update the grid with the filtered coordinates
+        self.update_grid(self.dynamic_occupancy_grid, filtered_coords)
+
+        self.debug_image(thresh1)
+
+    # def update_grid(self, grid, world_coords):
+    #     # Convert world coordinates to grid indices and update the grid
+    #     for coord in world_coords:
+    #         x_idx = int((coord[0] - self.grid_min_x) / self.grid_resolution)
+    #         y_idx = int((coord[1] - self.grid_min_y) / self.grid_resolution)
+
+    #         # Ensure the indices are within the grid bounds
+    #         if 0 <= x_idx < self.grid_width and 0 <= y_idx < self.grid_height:
+    #             grid[y_idx, x_idx] = 255  # Mark as occupied
 
     def update_grid(self, grid, world_coords):
         # Convert world coordinates to grid indices and update the grid
-        for coord in world_coords:
-            x_idx = int((coord[0] - self.grid_min_x) / self.grid_resolution)
-            y_idx = int((coord[1] - self.grid_min_y) / self.grid_resolution)
+        x_indices, y_indices, _ = self.convert_and_validate_grid_indices(world_coords)
 
-            # Ensure the indices are within the grid bounds
-            if 0 <= x_idx < self.grid_width and 0 <= y_idx < self.grid_height:
-                grid[y_idx, x_idx] = 255  # Mark as occupied
+        grid[y_indices, x_indices] = 255  # Mark as occupied
             
-    #    # grid[:] = cv2.morphologyEx(grid, cv2.MORPH_OPEN, np.ones((5, 5), np.uint8))
+    def detect_stationary_obstacles(self, world_coords):
+        # Convert world coordinates to grid indices
+        x_indices, y_indices, valid_indices = self.convert_and_validate_grid_indices(world_coords)
 
-    def calculate_frame_difference(self, img1, img2):
-        # Blur and convert to grayscale
-        blurred1 = cv2.GaussianBlur(img1, (5, 5), 0)
-        blurred2 = cv2.GaussianBlur(img2, (5, 5), 0)
-        gray1 = cv2.cvtColor(blurred1, cv2.COLOR_BGR2GRAY)
-        gray2 = cv2.cvtColor(blurred2, cv2.COLOR_BGR2GRAY)
+        # Increment the persistence map at the detected indices
+        self.persistence_map[y_indices, x_indices] += 1
 
-        # Calculate absolute difference
-        diff1 = cv2.absdiff(gray1, self.previous_frame_camera1) if self.previous_frame_camera1 is not None else gray1
-        diff2 = cv2.absdiff(gray2, self.previous_frame_camera2) if self.previous_frame_camera2 is not None else gray2
+        # Find stationary obstacles
+        stationary_mask = self.persistence_map[y_indices, x_indices] > self.persistence_map_threshold
+        stationary_coords = world_coords[valid_indices][stationary_mask]
 
-        # Store current frames for next calculation
-        self.previous_frame_camera1 = gray1
-        self.previous_frame_camera2 = gray2
+        # Reset the persistence map at the detected indices
+        self.persistence_map[y_indices[stationary_mask], x_indices[stationary_mask]] = 0
 
-        return diff1, diff2
+        return stationary_coords
 
-    def apply_threshold(self, diff1, diff2):
-        _, thresh1 = cv2.threshold(diff1, 30, 255, cv2.THRESH_BINARY)
-        _, thresh2 = cv2.threshold(diff2, 30, 255, cv2.THRESH_BINARY)
-        return thresh1, thresh2
+
+    def convert_and_validate_grid_indices(self, world_coords):
+        # Calculate scaling factors
+        image_aspect_ratio = self.grid_height / self.grid_width
+        grid_aspect_ratio = self.grid_resolution
+
+        # Adjust for the aspect ratio difference
+        x_scaling_factor = self.grid_resolution
+        y_scaling_factor = self.grid_resolution * image_aspect_ratio
+
+        # Convert world coordinates to grid indices
+        x_indices = ((world_coords[:, 0] - self.grid_min_x) / y_scaling_factor).astype(int)
+        y_indices = ((world_coords[:, 1] - self.grid_min_y) / x_scaling_factor).astype(int)
+
+        # Ensure the indices are within the grid bounds
+        valid_indices = (
+            (x_indices >= 0) & (x_indices < self.grid_width) &
+            (y_indices >= 0) & (y_indices < self.grid_height)
+        )
+
+        return x_indices[valid_indices], y_indices[valid_indices], valid_indices
+
 
     def visualize_occupancy_grids(self):
         # Resize the grids for consistent display
@@ -290,19 +327,38 @@ class FloorProjection(Node):
         ogm_msg = bridge.cv2_to_imgmsg(combined_grid)
         self.static_ogm_pub.publish(ogm_msg)
 
-        # Display the combined image
-      #  cv2.imshow("Occupancy Grids", combined_grid)
-      #  cv2.waitKey(1)
 
-    def add_robot_to_grid(self, grid, robot_pose, marker_value=128):
+    def add_robot_to_grid(self, grid, robot_pose, marker_value=(0, 0, 255)):
         # Convert robot pose (world coordinates) to grid indices
         x_idx = int((robot_pose.x - self.grid_min_x) / self.grid_resolution)
         y_idx = int((robot_pose.y - self.grid_min_y) / self.grid_resolution)
 
         # Ensure indices are within grid bounds
         if 0 <= x_idx < self.grid_width and 0 <= y_idx < self.grid_height:
-            grid[y_idx, x_idx] = marker_value  # Add robot position marker
+            grid[y_idx, x_idx] = 128 if grid.ndim == 2 else marker_value  # Add robot position marker
 
+
+    def get_random_goal(self, occupancy_grid):
+        # Find a random unoccupied cell in the grid
+        while True:
+            x_grid = random.randint(0, self.grid_width - 1)
+            y_grid = random.randint(0, self.grid_height - 1)
+            if occupancy_grid[y_grid, x_grid] == 255:
+                # Convert grid indices to world coordinates
+                x_world = self.grid_min_x + x_grid * self.grid_resolution
+                y_world = self.grid_min_y + y_grid * self.grid_resolution
+                break
+        return x_world, y_world
+    
+    def check_distance_to_goal(self, goal_x, goal_y, robot_x, robot_y):
+        # Calculate Euclidean distance between robot and goal
+        distance = ((goal_x - robot_x) ** 2 + (goal_y - robot_y) ** 2) ** 0.5
+        return distance
+
+    def debug_image(self, img):
+        img_msg = bridge.cv2_to_imgmsg(img)
+        self.debug_image_pub.publish(img_msg)
+        
 
 def main(args=None):
     rclpy.init(args=args)

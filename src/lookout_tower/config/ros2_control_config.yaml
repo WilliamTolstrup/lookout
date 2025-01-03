@@ -1,0 +1,17 @@
+controller_manager:
+  ros__parameters:
+    update_rate: 100
+    robot_description: ""
+
+ackermann_controller:
+  ros__parameters:
+    type: ackermann_controller/AckermannController
+    front_wheel_names: ["front_left_wheel_joint", "front_right_wheel_joint"]
+    rear_wheel_names: ["rear_left_wheel_joint", "rear_right_wheel_joint"]
+    steering_joint_name: "steering_joint"
+    wheelbase: 0.22  # Distance between front and rear wheels (meters)
+    front_track: 0.17  # Distance between the front left and right wheels (meters)
+    rear_track: 0.17  # Distance between the rear left and right wheels (meters)
+    max_steering_angle: 0.418879  # Approx. 24 degrees
+    speed_to_steering_angle: 0.2  # Adjust based on testing
+
