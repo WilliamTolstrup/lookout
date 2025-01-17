@@ -68,9 +68,6 @@ class FloorProjection(Node):
 
         self.initialize_grids()
 
-
-
-
         # Start subscription and publisher
         self.robot_pose_sub = self.create_subscription(Pose, '/robot/pose', self.robot_pose_callback, 10)
         self.image1_sub = Subscriber(self, Image, '/camera1/image_raw')
@@ -103,11 +100,14 @@ class FloorProjection(Node):
         self.image2 = bridge.imgmsg_to_cv2(img2, desired_encoding='bgr8')
         self.get_logger().info("Images received", once=True)
 
+        images = [self.image1, self.image2]
+        homographies = [self.homography_matrix1, self.homography_matrix2]
+
         # Update the occupancy grids
-        self.update_static_grid([self.image1, self.image2])
+        self.update_static_grid(images, homographies)
         self.publish_occupancy_grid(self.static_occupancy_grid.flatten().tolist(), self.grid_resolution, self.grid_width, self.grid_height, "static_map")
 
-        self.update_dynamic_grid(self.image1, self.image2)
+        self.update_dynamic_grid(images, homographies)
         self.publish_occupancy_grid(self.dynamic_occupancy_grid.flatten().tolist(), self.grid_resolution, self.grid_width, self.grid_height, "dynamic_map")
 
         # Visualize the occupancy grids
@@ -175,9 +175,9 @@ class FloorProjection(Node):
         self.dynamic_occupancy_grid = np.zeros((self.grid_height, self.grid_width), dtype=np.uint8)
         self.persistence_map = np.zeros((self.grid_height, self.grid_width), dtype=np.uint8)
 
-    def update_static_grid(self, images):
+    def update_static_grid(self, images, homographies):
         # Process each camera image
-        for img, homography in zip(images, [self.homography_matrix1, self.homography_matrix2]):
+        for img, homography in zip(images, homographies):
             cleaned_mask = self.drivable_space(img)
             world_coords = camera_commons.pixels_to_world(
                 np.argwhere(cleaned_mask == 255)[:, ::-1], np.linalg.inv(homography)
@@ -194,26 +194,23 @@ class FloorProjection(Node):
             y_idx = int((self.current_goal.y - self.grid_min_y) / self.grid_resolution)
             self.static_occupancy_grid[int(y_idx), int(x_idx)] = 128  # Mark the goal as occupied
 
-
-
-
-    def update_dynamic_grid(self, img1, img2):
+    def update_dynamic_grid(self, images, homographies):
         # Exclude points within a certain radius of the robot
         exclusion_radius = 0.4 # Meters in world coordinates
 
         # Apply temporal decay to the dynamic grid
         self.dynamic_occupancy_grid = (self.dynamic_occupancy_grid * 0.4).astype(np.uint8)  # Allows the detections to fade out over time
 
-        # Apply background subtraction on both images
-        fg_mask1 = self.bg_subtractor.apply(img1)
-        fg_mask2 = self.bg_subtractor.apply(img2)
+        all_filtered_coords = []
+        all_world_coords = []
 
-        # Threshold the foreground masks to isolate moving objects
-        _, thresh1 = cv2.threshold(fg_mask1, 200, 255, cv2.THRESH_BINARY)
-        _, thresh2 = cv2.threshold(fg_mask2, 200, 255, cv2.THRESH_BINARY)
+        for img, homography in zip(images, homographies):
+            # Apply background subtraction on both images
+            fg_mask = self.bg_subtractor.apply(img)
 
-        # Process each camera image using thresholded masks
-        for thresh, homography in zip([thresh1, thresh2], [self.homography_matrix1, self.homography_matrix2]):
+            # Threshold the foreground masks to isolate moving objects
+            _, thresh = cv2.threshold(fg_mask, 200, 255, cv2.THRESH_BINARY)
+
             # Get world coordinates of moving objects
             world_coords = camera_commons.pixels_to_world(
                 np.argwhere(thresh == 0)[:, ::-1], np.linalg.inv(homography)
@@ -226,7 +223,6 @@ class FloorProjection(Node):
                 (world_coords[:, 1] <= self.grid_max_y)
             )
 
-            
             # Filter out points near the robot
             robot_x, robot_y = self.robot_pose.position.x, self.robot_pose.position.y
             distances = np.sqrt((world_coords[:, 0] - robot_x) ** 2 +
@@ -235,23 +231,17 @@ class FloorProjection(Node):
 
             # Apply the exclusion mask
             filtered_coords = world_coords[exclusion_mask]
+            all_filtered_coords.append(filtered_coords)
+            all_world_coords.append(world_coords)
 
-        self.world_coords_stationary = self.detect_stationary_obstacles(world_coords)
+        # Combine the filtered coordinates from all cameras
+        all_filtered_coords = np.vstack(all_filtered_coords)
+        all_world_coords = np.vstack(all_world_coords)
 
-        # Update the grid with the filtered coordinates
-        self.update_grid(self.dynamic_occupancy_grid, filtered_coords)
+        self.world_coords_stationary = self.detect_stationary_obstacles(all_world_coords)
 
-        self.debug_image(thresh1)
-
-    # def update_grid(self, grid, world_coords):
-    #     # Convert world coordinates to grid indices and update the grid
-    #     for coord in world_coords:
-    #         x_idx = int((coord[0] - self.grid_min_x) / self.grid_resolution)
-    #         y_idx = int((coord[1] - self.grid_min_y) / self.grid_resolution)
-
-    #         # Ensure the indices are within the grid bounds
-    #         if 0 <= x_idx < self.grid_width and 0 <= y_idx < self.grid_height:
-    #             grid[y_idx, x_idx] = 255  # Mark as occupied
+            # Update the grid with the filtered coordinates
+        self.update_grid(self.dynamic_occupancy_grid, all_filtered_coords)
 
     def update_grid(self, grid, world_coords):
         # Convert world coordinates to grid indices and update the grid
