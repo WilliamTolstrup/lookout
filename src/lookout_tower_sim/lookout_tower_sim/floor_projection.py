@@ -100,7 +100,7 @@ class FloorProjection(Node):
         self.image2 = bridge.imgmsg_to_cv2(img2, desired_encoding='bgr8')
         self.get_logger().info("Images received", once=True)
 
-        images = [self.image1, self.image2]
+        images = [self.image1]#, self.image2]
         homographies = [self.homography_matrix1, self.homography_matrix2]
 
         # Update the occupancy grids
@@ -179,6 +179,7 @@ class FloorProjection(Node):
         # Process each camera image
         for img, homography in zip(images, homographies):
             cleaned_mask = self.drivable_space(img)
+            self.debug_image(cleaned_mask)
             world_coords = camera_commons.pixels_to_world(
                 np.argwhere(cleaned_mask == 255)[:, ::-1], np.linalg.inv(homography)
             )
