@@ -2,16 +2,15 @@ import rclpy
 from rclpy.node import Node
 
 from sensor_msgs.msg import Image
-from geometry_msgs.msg import Vector3, Pose
-from message_filters import ApproximateTimeSynchronizer, Subscriber
+from geometry_msgs.msg import Pose
 
 import numpy as np
 import cv2
 from cv_bridge import CvBridge
 import math
-from collections import deque
 from scipy.spatial.transform import Rotation as R
 import camera_commons
+from filterpy.kalman import KalmanFilter
 
 bridge = CvBridge()
 
@@ -19,163 +18,164 @@ class DetectRobot(Node):
     def __init__(self):
         super().__init__('localization')
 
-        self.orientation_filter = OrientationFilter(window_size=25)
-
-        # Initialize homography matrices
-        self.homography_matrix1 = np.array([[7.43359893e+01, -6.05110948e+01,  2.82275964e+02],
-                                            [1.86232912e-01,  1.48613961e+00,  2.44246163e+02],
-                                            [7.20071467e-04, -1.89563847e-01,  1.00000000e+00]]) # With checkerboard at 0, 0, 0
-
-        self.homography_matrix2 = np.array([[-5.50815917e+01,  3.78277731e+01,  3.45269719e+02],
-                                            [-2.45905106e+00,  3.68606000e+00,  1.63346149e+02],
-                                            [-1.31961493e-02,  1.18132825e-01,  1.00000000e+00]])
+        # Initialize homography matrix
+        self.homography_matrix = np.array([[ 5.24020805e+02, -4.06412456e+02,  9.43400498e+02],
+                                           [ 2.17512805e+01, -1.69587008e+01,  8.76806358e+02],
+                                           [-5.76355318e-04, -4.37983444e-01,  1.00000000e+00]])
         
+        self.camera_matrix = np.array([[1071.517664190868, 0, 972.2054550900091],
+                          [0, 1071.770866282639, 506.1378258844148],
+                          [0, 0, 1]])
 
-        self.camera1_world_position = np.array([0.0, -2.9, 3.0]) # TODO: Figure out how to get these from .yaml file
-        self.camera2_world_position = np.array([0.0, 6.6, 3.0])
+        self.dist_coeffs = np.array([0.04869923290209156, -0.2997938546736623,
+                        -0.0005899377699054353, -0.002503515897917072, 0.6394053014838494])
+
+        # Aruco dictionary and parameters
+        self.aruco_dict = cv2.aruco.Dictionary_get(cv2.aruco.DICT_4X4_50)
+        self.aruco_params = cv2.aruco.DetectorParameters_create()
 
         # Initialize variables
-        self.previous_orientation = {1: None, 2: None}
-        self.previous_position = {1: None, 2: None}
-        self.previous_weight1 = 0.0
-        self.previous_weight2 = 0.0
+        self.previous_orientation = None
+        self.previous_position = None
+
+        # Kalman filter
+        self.kalman_filter = KalmanFilter(dim_x=6, dim_z=3)
+        self.kalman_filter.x = np.zeros((6, 1))  # [x, y, theta, v] state vector
+        self.kalman_filter.P = np.eye(6) * 1000  # Large initial uncertainty
+        self.kalman_filter.F = np.array([
+            [1, 0, 0, 1, 0, 0],  # x = x + vx
+            [0, 1, 0, 0, 1, 0],  # y = y + vy
+            [0, 0, 1, 0, 0, 1],  # theta = theta + omega
+            [0, 0, 0, 1, 0, 0],  # vx = vx
+            [0, 0, 0, 0, 1, 0],  # vy = vy
+            [0, 0, 0, 0, 0, 1],  # omega = omega
+        ])  # State transition matrix
+        self.kalman_filter.H = np.array([
+            [1, 0, 0, 0, 0, 0],  # Map x
+            [0, 1, 0, 0, 0, 0],  # Map y
+            [0, 0, 1, 0, 0, 0],  # Map theta
+        ])  # Measurement function
+        self.kalman_filter.R = np.eye(3) * 0.1  # Measurement noise
+        self.kalman_filter.Q = np.eye(6) * 0.1  # Process noise
+
+
 
         # Start subscription and publisher
-        self.image1_sub = Subscriber(self, Image, '/camera1/image_raw')
-        self.image2_sub = Subscriber(self, Image, '/camera2/image_raw')
-        self.pub_image1_processed = self.create_publisher(Image, 'camera1/image_processed', 10)
-        self.pub_image2_processed = self.create_publisher(Image, 'camera2/image_processed', 10)
-        self.pub_image1_processed_debug = self.create_publisher(Image, 'camera1/image_processed_debug', 10)
-        self.pub_image2_processed_debug = self.create_publisher(Image, 'camera2/image_processed_debug', 10)
+        self.image_sub = self.create_subscription(Image, '/camera/raw_image', self.image_callback, 10)
         self.pub_pose = self.create_publisher(Pose, '/robot/pose', 10)
-        self.pub_weights = self.create_publisher(Vector3, '/robot/weights', 10)
+        self.pub_localization_processed = self.create_publisher(Image, '/camera/image_processed', 10)
+        self.pub_localization_debug = self.create_publisher(Image, '/camera/localization_debug', 10)
 
-        # Synchronize image topics
-        self.synchronizer = ApproximateTimeSynchronizer([self.image1_sub, self.image2_sub], queue_size=10, slop=0.1)
-        self.synchronizer.registerCallback(self.callback)
-
-    def callback(self, img1, img2):
+    def image_callback(self, img):
         # Convert ROS Image to OpenCV image
-        self.image1 = bridge.imgmsg_to_cv2(img1, desired_encoding='bgr8')
-        self.image2 = bridge.imgmsg_to_cv2(img2, desired_encoding='bgr8')
+        self.image = bridge.imgmsg_to_cv2(img, desired_encoding='bgr8')
         self.get_logger().info("Images received", once=True)
 
-        world_robot_position1, camera_robot_orientation1, weight1, front_midpoint1, rear_midpoint1, front_wheels1, rear_wheels1 = self.loop(self.image1, 1)
-        world_robot_position2, camera_robot_orientation2, weight2, front_midpoint2, rear_midpoint2, front_wheels2, rear_wheels2 = self.loop(self.image2, 2)
+        # Detect and localize the robot
+        position, orientation = self.detect_and_localize(self.image)
 
-        # Normalise weights for logging
-        weight_total = weight1 + weight2
-        weight1 = weight1 / weight_total if weight_total != 0 else 0
-        weight2 = weight2 / weight_total if weight_total != 0 else 0
+        # Validate the orientation
+        orientation = self.validate_orientation(self.previous_orientation, orientation)
 
-        # Fuse the data
-        if weight1 + weight2 != 0:
-            fused_position, fused_orientation = self.weighted_data_fusion(world_robot_position1, world_robot_position2, camera_robot_orientation1, camera_robot_orientation2, weight1, weight2)
-        #    self.orientation_filter.add_orientation(fused_orientation)
-        #    fused_orientation = self.orientation_filter.get_filtered_orientation()
-        else:
-            fused_position, fused_orientation = (0.0, 0.0), 0.0
+        # Validate the position
+        position = self.validate_position(self.previous_position, position)
+
+        # Store the orientation and position for the next iteration
+        self.previous_orientation = orientation
+        self.previous_position = position
+
+        # Publish the robot pose
+        if position is not None and orientation is not None:
+            self.publish_pose(position, orientation)
+
+            # Draw the robot pose on the image
+#            img_debug = self.draw_robot_pose(self.image, (position[0], position[1]), orientation)
+            img = self.annotate_image(self.image, (position[0], position[1]), orientation)
+#            self.debug_image(img_debug)
+
+            # Publish the processed image
+            img_msg = bridge.cv2_to_imgmsg(img)
+            self.pub_localization_processed.publish(img_msg)
+
+
+    def detect_and_localize(self, img):
+        # Aruco detection as primary, wheel detection as backup
+        pose = self.detect_aruco(img)
+
+        if pose is None:
+            # Use backup localization
+            self.get_logger().info("No Aruco markers detected, using backup localization")
+            pose = self.detect_wheels(img)
+
+        # If no position or orientation is detected from either method, rely on kalman filter prediction
+        if pose is None:
+            self.get_logger().info("No localization detected, using Kalman filter prediction")
+            self.kalman_filter.predict()
+            pose = np.array([self.kalman_filter.x[0], self.kalman_filter.x[2]]).reshape(2, 1)
+        
+        # Check if pose is still None after prediction and initialization
+        if pose is None:
+            self.get_logger().error("Pose is None, unable to update Kalman filter")
+            return None, None  # Early return if pose is still invalid
+
+        if pose is not None:
+            # Update kalman filter with the new measurements
+            position, orientation = pose[0], pose[1]
+
+            # Faltten position to extract x and y
+            if isinstance(position, (tuple, np.ndarray)) and len(position) == 2:
+                x, y = position[0], position[1]
+            else:
+                raise ValueError(f"Unexpected position format: {position}")
             
-        # Annotate image
-        self.image1 = self.annotate_image(self.image1, fused_position, fused_orientation, front_midpoint1, rear_midpoint1)
-        self.image2 = self.annotate_image(self.image2, fused_position, fused_orientation, front_midpoint2, rear_midpoint2)
+            # Handle orientation as yaw angle (Because the kalman filter doesn't accept quaternions)
+            if isinstance(orientation, (list, tuple, np.ndarray)) and len(orientation) == 4:
+                orientation = self.quaternion_to_yaw(orientation)
+            elif isinstance(orientation, (float, int)):
+                pass
+            else:
+                raise ValueError(f"Unexpected orientation format: {orientation}")
+            
+            pose = np.array([x, y, orientation], dtype=float).reshape(3, 1)
+            self.kalman_filter.update(pose)
 
-        # Publish the messages
-        self.publish_msgs(self.image1, self.image2, (fused_position, fused_orientation))
-        self.publish_msgs(front_wheels1, rear_wheels1, debug=True)
-        # Publish weights
-        weight_msg = Vector3()
-        weight_msg.x = weight1 if weight1 > 0.0 else self.previous_weight1
-        weight_msg.y = weight2 if weight2 > 0.0 else self.previous_weight2
-        self.pub_weights.publish(weight_msg)
-        self.previous_weight1 = weight_msg.x
-        self.previous_weight2 = weight_msg.y
+        return (pose[0][0], pose[1][0]), pose[2][0] # Position, orientation
 
+    def detect_aruco(self, img):
+        # Detect Aruco markers
+        corners, ids, _ = cv2.aruco.detectMarkers(img, self.aruco_dict, parameters=self.aruco_params,
+                                                  cameraMatrix=self.camera_matrix, distCoeff=self.dist_coeffs)
+        
+        if ids is not None:
+            for i, corner in enumerate(corners):
+                # Get the 2D image coordinates of the marker corners
+                corners_2d = corner[0] # Shape: (4, 2)
 
-    def loop(self, img, camera_id):
+                center_2d = np.mean(corners_2d, axis=0)
 
-        if camera_id == 1:
-            homography_matrix = self.homography_matrix1
-            camera_world_position = self.camera1_world_position
-        elif camera_id == 2:
-            homography_matrix = self.homography_matrix2
-            camera_world_position = self.camera2_world_position
+                # Map the center and corners to the world plane
+                center_world = camera_commons.point_to_world(center_2d, self.homography_matrix)
+                corners_world = [camera_commons.point_to_world(corners_2d, self.homography_matrix) for corners_2d in corners_2d]
+
+                # Compute orientation using the first two corners
+                dx = corners_world[1][0] - corners_world[0][0]
+                dy = corners_world[1][1] - corners_world[0][1]
+                angle = math.atan2(dy, dx) # Angle in radians
+
+                quaternion = self.angle_to_quaternion(angle)
+
+                return center_world, quaternion
+        
         else:
-            self.get_logger().warn("Invalid camera ID. Skipping processing.", once=True)
-            return
+            return None
 
-        if img is not None:
-            front_wheels, rear_wheels = self.find_wheels(img)
-
-            front_center = self.detect_wheel_centers(front_wheels)
-            rear_center = self.detect_wheel_centers(rear_wheels)
-
-            camera_robot_position, camera_robot_orientation, front_midpoint, rear_midpoint = self.calculate_robot_pose(front_center, rear_center, camera_id)
-
-            if camera_robot_orientation is None:
-                self.get_logger().warn(f"Cannot calculate robot orientation from camera {camera_id}.", once=True)
-                weight = 0
-                camera_robot_orientation = None
-            if camera_robot_position is None:
-                self.get_logger().warn(f"Cannot calculate robot position from camera {camera_id}.", once=True)
-                weight = 0
-                world_robot_position = None
-            if camera_robot_position and camera_robot_orientation is None:
-                self.get_logger().warn(f"Cannot calculate robot position and orientation from camera {camera_id}.", once=True)
-                weight = 0
-                world_robot_position = None
-                camera_robot_orientation = None
-
-
-            elif camera_robot_position and camera_robot_orientation is not None:
-                world_robot_position = camera_commons.point_to_world(camera_robot_position, np.linalg.inv(homography_matrix))
-               # world_robot_position = self.homography_transform(homography_matrix, camera_robot_position)
-                weight = self.calculate_weights(world_robot_position, camera_world_position)
-
-            return world_robot_position, camera_robot_orientation, weight, front_midpoint, rear_midpoint, front_wheels, rear_wheels
-
-    def find_wheels(self, img):
-        """
-        Detect wheels in the image
-        """
-        # Convert to HSV
-        hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
-
-        # Red and blue thresholds
-        red_lower_1, red_upper_1 = (0, 50, 50), (0, 255, 255)
-       # red_lower_2, red_upper_2 = (170, 50, 50), (180, 255, 255)
-        blue_lower, blue_upper = (100, 50, 50), (130, 255, 255)
-
-        # Create masks
-        red_mask = cv2.inRange(hsv, red_lower_1, red_upper_1)
-       # red_mask_2 = cv2.inRange(hsv, red_lower_2, red_upper_2)
-       # red_mask = cv2.bitwise_or(red_mask_1, red_mask_2)
-        blue_mask = cv2.inRange(hsv, blue_lower, blue_upper)
-
-
-        # Erode and dilate masks to remove noise
-        kernel = np.ones((5, 5), np.uint8)
-        red_mask = cv2.erode(red_mask, kernel, iterations=1)
-        red_mask = cv2.dilate(red_mask, kernel, iterations=1)
-        blue_mask = cv2.erode(blue_mask, kernel, iterations=1)
-        blue_mask = cv2.dilate(blue_mask, kernel, iterations=1)
-
-
-        return red_mask, blue_mask
-
-    def detect_wheel_centers(self, mask):
-        """
-        Detect wheel centers from a mask.
-        :param mask: Binary mask for the color.
-        :return: List of (x, y) positions for detected wheels.
-        """
-        contours, _ = cv2.findContours(mask, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
-        centers = []
-        for contour in contours:
-            (x, y), radius = cv2.minEnclosingCircle(contour)
-            if 1 < radius < 200:  # Filter based on radius
-                centers.append((x, y))
-        return centers
+    def quaternion_multiply(self, quaternion1, quaternion0):
+        w0, x0, y0, z0 = quaternion0
+        w1, x1, y1, z1 = quaternion1
+        return np.array([-x1 * x0 - y1 * y0 - z1 * z0 + w1 * w0,
+                        x1 * w0 + y1 * z0 - z1 * y0 + w1 * x0,
+                        -x1 * z0 + y1 * w0 + z1 * x0 + w1 * y0,
+                        x1 * y0 - y1 * x0 + z1 * w0 + w1 * z0], dtype=np.float64)
 
     def normalize_angle_degrees(self, angle):
         """
@@ -195,6 +195,12 @@ class DetectRobot(Node):
         :return: The normalized angle.
         """
         return (angle + math.pi) % (2 * math.pi) - math.pi
+
+    def angle_to_quaternion(self, angle):
+        # Quaternion representing a rotation about the z-axis
+        q_w = math.cos(angle / 2)  # Scalar part
+        q_z = math.sin(angle / 2)  # Z-axis rotation part
+        return np.array([q_w, 0, 0, q_z])
 
     def normalize_quaternion(self, q):
         """
@@ -219,82 +225,6 @@ class DetectRobot(Node):
         # Convert to degrees
         return math.degrees(yaw)
 
-    def calculate_robot_pose(self, front_centers, rear_centers, camera_id):
-        """
-        Calculate the robot's position and orientation based on wheel centerpoints.
-        :param front_wheels: List of two (x, y) positions for the front wheels.
-        :param rear_wheels: List of two (x, y) positions for the rear wheels.
-        :return: Robot position (midpoint of rear wheels) and orientation (in degrees).
-        """
-
-        if len(front_centers) == 2:
-            # Midpoint of front wheels
-            front_midpoint = (
-                (front_centers[0][0] + front_centers[1][0]) / 2,
-                (front_centers[0][1] + front_centers[1][1]) / 2,
-            )
-        elif len(front_centers) == 1:
-            front_midpoint = front_centers[0]
-        else:
-            front_midpoint = None
-
-
-        if len(rear_centers) == 2:
-            # Midpoint of rear wheels (robot's position)
-            rear_midpoint = (
-                (rear_centers[0][0] + rear_centers[1][0]) / 2,
-                (rear_centers[0][1] + rear_centers[1][1]) / 2,
-            )
-        elif len(rear_centers) == 1:
-            rear_midpoint = rear_centers[0]
-        else:
-            rear_midpoint = None
-
-        # Calculate robot position by taking the midpoint of the two midpoints from front and rear wheels (if both are present)
-        if front_midpoint is not None and rear_midpoint is not None:
-            robot_position = (
-                (front_midpoint[0] + rear_midpoint[0]) / 2,
-                (front_midpoint[1] + rear_midpoint[1]) / 2,
-            )
-
-            # Calculate robot orientation based on the direction vector between the front and rear midpoints
-            if camera_id == 2:
-                dx = -(front_midpoint[0] - rear_midpoint[0])
-                dy = -(front_midpoint[1] - rear_midpoint[1])
-            else:
-                dx = front_midpoint[0] - rear_midpoint[0]
-                dy = front_midpoint[1] - rear_midpoint[1]
-
-            direction_vector = np.array([dx, dy])
-            angle = math.atan2(direction_vector[1], direction_vector[0])  # Angle in radians
-            angle = self.normalize_angle_rad(angle)
-            quaternion = R.from_euler('z', angle).as_quat() # Convert to quaternion
-            robot_orientation = self.normalize_quaternion(quaternion)
-            self.previous_orientation[camera_id] = robot_orientation
-
-        # Fallbacks if one of the midpoints is missing
-        elif front_midpoint is not None:
-            robot_position = front_midpoint
-            robot_orientation = self.previous_orientation[camera_id] if self.previous_orientation[camera_id] is not None else None
-
-        elif rear_midpoint is not None:
-            robot_position = rear_midpoint
-            robot_orientation = self.previous_orientation[camera_id] if self.previous_orientation[camera_id] is not None else None
-
-        else:
-            # Use the previous position and orientation as fallback
-            robot_position = self.previous_position[camera_id]
-            robot_orientation = self.previous_orientation[camera_id]
-
-        # Round the robot position to two decimal places
-        if robot_position is not None:
-            robot_position = round(robot_position[0], 2), round(robot_position[1], 2)
-        
-        # Update the previous position for the next call
-        self.previous_position[camera_id] = robot_position
-
-        return robot_position, robot_orientation, front_midpoint, rear_midpoint
-
     def validate_orientation(self, previous_orientation, current_orientation, max_change=math.radians(10)):
         """
         Validate the current orientation based on the previous orientation.
@@ -309,9 +239,12 @@ class DetectRobot(Node):
         if previous_orientation is None:
             # No reference orientation available, accept the new orientation
             return current_orientation
+        
+        previous_yaw = previous_orientation#self.quaternion_to_yaw(previous_orientation)
+        current_yaw = current_orientation#self.quaternion_to_yaw(current_orientation)
 
 
-        change = abs(current_orientation - previous_orientation)
+        change = abs(current_yaw - previous_yaw)
         change = min(change, 2 * math.pi - change) 
 
         if change > max_change:
@@ -321,199 +254,213 @@ class DetectRobot(Node):
         # Else accept the new orientation
         return current_orientation
 
-    def homography_transform(self, homography_matrix, pixel_point):
+    def validate_position(self, previous_position, current_position, max_change=0.1):
         """
-        Transform a pixel point to world coordinates using a homography matrix.
-        :param homography_matrix: The homography matrix.
-        :param pixel_point: The pixel point to transform.
-        :return: The world coordinates.
-        """
-        # Convert the pixel point to homogeneous coordinates
-        pixel_point_homogeneous = np.append(pixel_point, 1)
-
-        # Transform the pixel point to world coordinates using the homography matrix
-        world_point_homogeneous = np.dot(homography_matrix, pixel_point_homogeneous)
-
-        # Convert back to Cartesian coordinates
-        world_point = world_point_homogeneous[:2] / world_point_homogeneous[2]
-
-        return world_point
-
-    def calculate_weights(self, world_robot_pos, camera_world_position):
-        """
-        Calculate weights for two robot positions based on distance to the cameras.
-        :param world_robot_pos: The robot's world position
-        :param camera_world_position: The camera's world position.
-        :return: The weight for the camera.
-        """
-        robot_z = 0  # Assume robot is on the ground
-        # Calculate distances from the robot to each camera
-        distance = math.sqrt((world_robot_pos[0] - camera_world_position[0])**2 + (world_robot_pos[1] - camera_world_position[1])**2 + (robot_z - camera_world_position[2])**2)
-
-        weight_camera = 1 / distance if distance != 0 else 0
-
-        return weight_camera
-
-
-    def weighted_data_fusion(self, world_robot_pos1, world_robot_pos2, orientation1, orientation2, weight1, weight2):
-        """
-        Fuse two sets of position and orientation data using a weighted average.
-        :param world_robot_pos1: The robot's world position from the first source.
-        :param world_robot_pos2: The robot's world position from the second source.
-        :param orientation1: The robot's orientation from the first source.
-        :param orientation2: The robot's orientation from the second source.
-        :param weight1: The camera weight for camera1.
-        :param weight2: The camera weight for camera2.
-        :return: Fused position and orientation.
+        Validate the current position based on the previous position.
+        :param previous_position: The previous position.
+        :param current_position: The current position.
+        :return: The validated position.
         """
 
-        # Normalize weights
-        total_weight = weight1 + weight2
-        norm_weight1 = weight1 / total_weight
-        norm_weight2 = weight2 / total_weight
+        if current_position is None:
+            return previous_position
 
-        if weight1 > 0 and weight2 > 0:
+        if previous_position is None:
+            # No reference position available, accept the new position
+            return current_position
 
-            position = (
-                norm_weight1 * world_robot_pos1[0] + norm_weight2 * world_robot_pos2[0],
-                norm_weight1 * world_robot_pos1[1] + norm_weight2 * world_robot_pos2[1],
-            )
-            
-            # Calculate the fused orientation
-            dot_product = np.dot(orientation1, orientation2)
-            if dot_product < 0: # If the dot product is negative, the orientations are in opposite directions
-                orientation2 = -orientation2
-            
-            orientation = norm_weight1 * orientation1 + norm_weight2 * orientation2
-            orientation = self.normalize_quaternion(orientation)
+        # convert to numpy arrays
+        previous_position = np.array(previous_position)
+        current_position = np.array(current_position)
 
+        change = np.linalg.norm(current_position - previous_position)
 
-        elif weight1 == 0 or orientation1 is None or world_robot_pos1 is None:
-            position = world_robot_pos2
-            orientation = orientation2
+        if change > max_change:
+            # Reject the new position
+            return previous_position
 
-        elif weight2 == 0 or orientation2 is None or world_robot_pos2 is None:
-            position = world_robot_pos1
-            orientation = orientation1
+        # Else accept the new position
+        return current_position
+
+    def draw_aruco_markers(self, img, corners, ids):
+        img = cv2.aruco.drawDetectedMarkers(img, corners, ids)
+            # Iterate through each detected marker to calculate and draw orientation
+        if ids is not None:
+            for i, corner in enumerate(corners):
+                # Get the top-left, top-right, bottom-right, and bottom-left corners
+                top_left = corner[0][0]
+                top_right = corner[0][1]
+
+                # Calculate the center of the marker
+                center_x = int((top_left[0] + top_right[0]) / 2)
+                center_y = int((top_left[1] + top_right[1]) / 2)
+                center = (center_x, center_y)
+
+                # Calculate the forward direction (approximate orientation)
+                forward_x = int(center_x + (top_right[0] - top_left[0]) * 0.5)
+                forward_y = int(center_y + (top_right[1] - top_left[1]) * 0.5)
+                forward_point = (forward_x, forward_y)
+
+                # Draw the arrow to indicate orientation
+                cv2.arrowedLine(img, center, forward_point, (0, 255, 0), 2, tipLength=0.3)
+
+        return img
+    
+    def draw_robot_pose(self, img, position, orientation):
+        position = (int(position[0]), int(position[1]))
+        cv2.circle(img, position, 5, (0, 255, 0), -1)
+
+        if isinstance(orientation, (list, tuple, np.ndarray)) and len(orientation) == 4:
+            orientation = self.quaternion_to_yaw(orientation)
+
+        # Draw the orientation of the robot
+        dx = 50 * math.cos(orientation)
+        dy = 50 * math.sin(orientation)
+        end_point = (position[0] + int(dx), position[1] + int(dy))
+        cv2.arrowedLine(img, position, end_point, (0, 0, 255), 2)
+
+        return img
+    
+    def publish_pose(self, position, orientation):
+        pose = Pose()
+
+        # Convert orientation to quaternion
+        orientation = self.angle_to_quaternion(orientation)
+
+        pose.position.x = position[0]
+        pose.position.y = position[1]
+        pose.position.z = 0.0
+        pose.orientation.x = orientation[0]
+        pose.orientation.y = orientation[1]
+        pose.orientation.z = orientation[2]
+        pose.orientation.w = orientation[3]
+        self.pub_pose.publish(pose)
+
+    def debug_image(self, img):
+        img_msg = bridge.cv2_to_imgmsg(img)
+        self.pub_localization_debug.publish(img_msg)
+
+###############################################################################
+##                        Backup pose estimation code                        ##
+###############################################################################
+
+    def find_wheels(self, img):
+        """
+        Detect wheels in the image
+        """
+        # Convert to HSV
+        hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
+
+        # Blue wheel thresholds
+        blue_lower_1, blue_upper_1 = (100, 120, 36), (118, 233, 48)
+        blue_lower_2, blue_upper_2 = (100, 144, 57), (115, 255, 255)
+        blue_lower_3, blue_upper_3 = (106, 175, 24), (179, 255, 255)
+
+        # Masks
+        blue_mask_1 = cv2.inRange(hsv, blue_lower_1, blue_upper_1)
+        blue_mask_2 = cv2.inRange(hsv, blue_lower_2, blue_upper_2)
+        blue_mask_3 = cv2.inRange(hsv, blue_lower_3, blue_upper_3)
+        blue_mask = cv2.bitwise_or(blue_mask_1, blue_mask_2)
+        blue_mask = cv2.bitwise_or(blue_mask, blue_mask_3)
+
+        # Erode and dilate masks to remove noise
+        kernel = np.ones((5, 5), np.uint8)
+        blue_mask = cv2.morphologyEx(blue_mask, cv2.MORPH_CLOSE, kernel)
+        blue_mask = cv2.erode(blue_mask, kernel, iterations=1)
+        blue_mask = cv2.morphologyEx(blue_mask, cv2.MORPH_CLOSE, kernel)
+
+        self.debug_image(blue_mask)
+
+        return blue_mask
+
+    def detect_wheel_centers(self, mask):
+        """
+        Detect wheel centers from a mask.
+        :param mask: Binary mask for the color.
+        :return: List of (x, y) positions for detected wheels.
+        """
+        contours, _ = cv2.findContours(mask, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
+        centers = []
+        for contour in contours:
+            (x, y), radius = cv2.minEnclosingCircle(contour)
+            if 1 < radius < 200:  # Filter based on radius
+                centers.append((x, y))
+        
+
+        return centers
+
+    def estimate_robot_position(self, centers):
+        # Calculate the average of all wheel centers, changing depending on how many centers are detected; represents the robot position
+        if len(centers) == 4:
+            # Calculate the center of the robot
+            x = (centers[0][0] + centers[1][0] + centers[2][0] + centers[3][0]) / 4
+            y = (centers[0][1] + centers[1][1] + centers[2][1] + centers[3][1]) / 4
+            return x, y
+        elif len(centers) == 3:
+            # Calculate the center of the robot
+            x = (centers[0][0] + centers[1][0] + centers[2][0]) / 3
+            y = (centers[0][1] + centers[1][1] + centers[2][1]) / 3
+            return x, y
+        elif len(centers) == 2:
+            # Calculate the center of the robot
+            x = (centers[0][0] + centers[1][0]) / 2
+            y = (centers[0][1] + centers[1][1]) / 2
+            return x, y
+        elif len(centers) == 1:
+            return centers[0]
+        else:
+            self.get_logger().info("No wheels detected")
+            return self.previous_position
+
+    def estimate_robot_orientation(self, position):
+        # Estimate orientation based on displacement between frames, to estimate orientation based on direction of movement
+        if position is None or self.previous_position is None:
+            return self.previous_orientation
+
+        # Displacement vector
+        displacement = np.array(position) - np.array(self.previous_position)
+        magnitude = np.linalg.norm(displacement)
+
+        if magnitude < 0.1: # If movement is negligible, keep the previous orientation
+            return self.previous_orientation
+        
+        # Calculate the angle of the displacement vector
+        orientation = math.atan2(displacement[1], displacement[0])
+
+        return orientation
+
+    def detect_wheels(self, img):
+        # Detect the wheels
+        mask = self.find_wheels(img)
+        centers = self.detect_wheel_centers(mask)
+
+        # Estimate the robot position
+        position = self.estimate_robot_position(centers)
+
+        # Estimate the robot orientation
+        orientation = self.estimate_robot_orientation(position)
+
+        # Update the previous position and orientation
+        self.previous_position = position
+        self.previous_orientation = orientation
 
         return position, orientation
 
-    def annotate_image(self, img, position, orientation, front_midpoint, rear_midpoint):
-        """
-        Annotate the image with the robot's position and orientation.
-        :param img: The image to annotate.
-        :param position: The robot's position.
-        :param orientation: The robot's orientation.
-        :return: The annotated image.
-        """
-        if position is not None:
-            position = (round(position[0], 2), round(position[1], 2))
-            cv2.putText(img, f"Position: {position}", (50, 50),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
-        if orientation is not None:
-            yaw = self.quaternion_to_yaw(orientation)
-            cv2.putText(img, f"Orientation: {yaw:.2f} degrees", (50, 80),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
+    def annotate_image(self, img, position, orientation):
+        # Draw the position of the robot
+        position = (round(int(position[0]), 2), round(int(position[1]), 2))
+        cv2.circle(img, position, 5, (0, 255, 0), -1)
 
-        if front_midpoint is not None:
-            cv2.circle(img, (int(front_midpoint[0]), int(front_midpoint[1])), 5, (0, 255, 0), -1)
-        if rear_midpoint is not None:
-            cv2.circle(img, (int(rear_midpoint[0]), int(rear_midpoint[1])), 5, (0, 255, 0), -1)
-        
-        # Draw line between front and rear wheels
-        if front_midpoint is not None and rear_midpoint is not None:
-            cv2.line(img, (int(front_midpoint[0]), int(front_midpoint[1])), (int(rear_midpoint[0]), int(rear_midpoint[1])), (0, 255, 0), 2)
+        if isinstance(orientation, (list, tuple, np.ndarray)):
+            orientation = self.quaternion_to_yaw(orientation)
+
+        # Draw the orientation of the robot
+        dx = 50 * math.cos(orientation)
+        dy = 50 * math.sin(orientation)
+        end_point = (position[0] + int(dx), position[1] + int(dy))
+        cv2.arrowedLine(img, position, end_point, (0, 0, 255), 2)
 
         return img
-
-
-    def publish_msgs(self, img1, img2, pose=None, debug=False):
-        """
-        Publish processed image and robot position + orientation.
-        :param img1: image1 to publish.
-        :param img2: image2 to publish.
-        :param pose: Tuple containing (position, orientation).
-        """
-        
-        if debug == True:
-            # Publish processed images
-            image1_processed_msg = bridge.cv2_to_imgmsg(img1)
-            if image1_processed_msg is not None:
-                self.pub_image1_processed_debug.publish(image1_processed_msg)
-            image2_processed_msg = bridge.cv2_to_imgmsg(img2)
-            if image2_processed_msg is not None:
-                self.pub_image2_processed_debug.publish(image2_processed_msg)
-        
-        else:
-            # Ensure pos_ang_msg contains three values
-            if pose is None or len(pose) < 2:
-                self.get_logger().warn("Invalid pose data. Skipping publish.", once=True)
-                return
-
-            # Fill in default values if data is incomplete
-        #  robot_position = pos_ang_msg[0] if pos_ang_msg[0] else (0.0, 0.0)
-            if pose[0] is None or not isinstance(pose[0], (tuple, list, np.ndarray)) or np.all(pose[0] == 0):
-                robot_position = (0.0, 0.0)
-            else:
-                robot_position = pose[0]
-                
-            robot_orientation = pose[1] if len(pose) > 1 else 0.0
-
-            # Prepare and publish the position message
-            pose_msg = Pose()
-            pose_msg.position.x = robot_position[0]
-            pose_msg.position.y = robot_position[1]
-            pose_msg.position.z = 0.0
-            pose_msg.orientation.x = robot_orientation[0]
-            pose_msg.orientation.y = robot_orientation[1]
-            pose_msg.orientation.z = robot_orientation[2]
-            pose_msg.orientation.w = robot_orientation[3]
-
-
-            # pose_msg = Vector3()
-            # pose_msg.x = robot_position[0]
-            # pose_msg.y = robot_position[1]
-            # pose_msg.z = robot_orientation
-            self.pub_pose.publish(pose_msg)
-
-            # Publish processed images
-            image1_processed_msg = bridge.cv2_to_imgmsg(img1)
-            if image1_processed_msg is not None:
-                self.pub_image1_processed.publish(image1_processed_msg)
-            image2_processed_msg = bridge.cv2_to_imgmsg(img2)
-            if image2_processed_msg is not None:
-                self.pub_image2_processed.publish(image2_processed_msg)
-
-
-class OrientationFilter:
-    def __init__(self, window_size=5):
-        self.sin_window = deque(maxlen=window_size)
-        self.cos_window = deque(maxlen=window_size)
-
-    def add_orientation(self, orientation):
-        # Convert to radians
-        orientation = math.radians(orientation)
-
-        # Append sin and cos values to the window
-        self.sin_window.append(math.sin(orientation))
-        self.cos_window.append(math.cos(orientation))
-    
-    def get_filtered_orientation(self):
-        if not self.sin_window or not self.cos_window:
-            return None
-
-        # Calculate the average sin and cos values
-        avg_sin = sum(self.sin_window) / len(self.sin_window)
-        avg_cos = sum(self.cos_window) / len(self.cos_window)
-
-        # Calculate the average orientation
-        orientation = math.atan2(avg_sin, avg_cos)
-
-        # Convert to degrees
-        orientation = math.degrees(orientation)
-        orientation = orientation % 360
-
-        return orientation
 
 def main(args=None):
     rclpy.init(args=args)
